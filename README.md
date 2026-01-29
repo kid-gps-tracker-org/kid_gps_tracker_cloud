@@ -4,7 +4,23 @@
 
 ## 概要
 
-GitHub Releases から nRF Cloud へのファームウェア自動/手動アップロード機能を提供します。
+GitHub Releases から nRF Cloud へのファームウェア管理機能を提供します。
+
+### 現在の状態
+
+**動作確認済み:**
+- ✅ GitHub API接続とファームウェア取得
+- ✅ nRF Cloud API接続テスト
+- ✅ GitHub Releasesからのファームウェアダウンロード
+
+**制限事項:**
+- ⚠️ nRF Cloud Developer プランでは、REST API経由のファームウェアアップロードに制限があります
+- ⚠️ **推奨**: nRF Cloud ポータル経由での手動アップロードを使用してください
+
+### 対象ユーザー
+
+- **Developer プラン**: 手動アップロードワークフロー（推奨）
+- **Team/Enterprise プラン**: REST API自動アップロード（要検証）
 
 ## ディレクトリ構造
 
@@ -55,33 +71,64 @@ GITHUB_TOKEN=your_github_token_here  # オプション
 
 ## 使用方法
 
-### 基本的な使用方法
+### 方法1: 手動アップロード（Developer プラン推奨）
 
-最新のファームウェアを nRF Cloud にアップロード：
+#### ステップ1: API接続テスト
 
 ```bash
 cd nrf_cloud_integration
-python upload_firmware.py --nrf-cloud-api-key YOUR_API_KEY
+python test_api.py
 ```
 
-### 特定のバージョンをアップロード
+成功すると、GitHubとnRF CloudのAPI接続が確認できます。
+
+#### ステップ2: GitHub Releasesから最新ファームウェアを確認
+
+1. https://github.com/kid-gps-tracker-org/kid_gps_tracker/releases にアクセス
+2. 最新リリースから `kid_gps_tracker_v*.*.0_nrf9151dk.zip` をダウンロード
+
+#### ステップ3: nRF Cloud ポータルでアップロード
+
+1. [nRF Cloud Portal](https://nrfcloud.com/) にログイン
+2. 左メニューから **Firmware Update** → **Firmware Bundles** を選択
+3. **Upload Bundle** をクリック
+4. ダウンロードした `.zip` ファイルを選択してアップロード
+5. 以下の情報を入力:
+   - **Name**: `kid_gps_tracker_nrf9151dk_v1.0.0` (バージョンに合わせて変更)
+   - **Version**: `1.0.0` (v なし)
+   - **Firmware Type**: `APP`
+   - **Description**: `Kid GPS Tracker firmware v1.0.0 for nRF9151dk`
+
+#### ステップ4: デバイスグループの作成（初回のみ）
+
+1. nRF Cloud Portal → **Device Management** → **Device Groups**
+2. **Create Device Group** をクリック
+3. グループ名を入力（例: `kid_gps_tracker_production`）
+4. デバイスを追加
+
+#### ステップ5: FOTA ジョブの作成
+
+1. **Firmware Update** → **FOTA Jobs** → **Create FOTA Job**
+2. アップロードしたファームウェアを選択
+3. ターゲットデバイスグループを選択
+4. **Create Job** をクリック
+5. **Start Job** でFOTAを開始
+
+### 方法2: REST API自動アップロード（Team/Enterprise プラン向け）
+
+**注意**: Developer プランでは REST API アップロードが制限されている可能性があります。
+
+#### 基本的な使用方法
 
 ```bash
-python upload_firmware.py --nrf-cloud-api-key YOUR_API_KEY --version v1.0.0
+cd nrf_cloud_integration
+python upload_firmware.py --version v1.0.0
 ```
 
-### 環境変数を使用
-
-`.env` ファイルに API キーを設定している場合：
+#### FOTA ジョブも自動作成
 
 ```bash
-python upload_firmware.py
-```
-
-### FOTA ジョブも自動作成
-
-```bash
-python upload_firmware.py --create-fota-job --device-ids device1 device2
+python upload_firmware.py --version v1.0.0 --create-fota-job --device-ids device1 device2
 ```
 
 ## コマンドラインオプション
@@ -132,6 +179,14 @@ $ python upload_firmware.py --version v1.0.1 --create-fota-job
 
 ## トラブルシューティング
 
+### エラー: "ValidationError[enum]: request.headers['content-type'] should be equal to one of the allowed values"
+
+**原因**: nRF Cloud Developer プランでは REST API経由のファームウェアアップロードが制限されています。
+
+**解決策**:
+- 手動アップロードワークフロー（方法1）を使用してください
+- または、Team/Enterprise プランへのアップグレードを検討してください
+
 ### エラー: "nRF Cloud API キーが指定されていません"
 
 `.env` ファイルを作成して `NRF_CLOUD_API_KEY` を設定するか、コマンドラインで `--nrf-cloud-api-key` オプションを使用してください。
@@ -143,6 +198,14 @@ API キーの権限を確認してください。`firmware:write` 権限が必�
 ### エラー: "Firmware asset not found"
 
 指定されたバージョンに対応するファームウェアファイルが GitHub Releases に存在しません。バージョン番号を確認してください。
+
+### test_api.py が成功しても upload_firmware.py が失敗する
+
+これは正常な動作です。Developer プランでは:
+- ✅ API接続テスト（GET リクエスト）は成功します
+- ❌ ファームウェアアップロード（POST リクエスト）は制限されています
+
+→ **手動アップロードワークフロー**を使用してください。
 
 ## nRF Cloud でのファームウェア確認
 
@@ -157,11 +220,34 @@ API キーの権限を確認してください。`firmware:write` 権限が必�
 3. **Start Job** をクリック
 4. デバイスが接続されていれば自動的に更新が開始されます
 
+## 実装済み機能
+
+### Phase 1-2: デバイス側 CI/CD（完了）
+- ✅ GitHub Actions による自動ビルド
+- ✅ Git tag によるバージョン管理
+- ✅ GitHub Releases への自動公開
+- ✅ 日本語リリースノート自動生成
+
+### Phase 3: クラウド統合（部分完了）
+- ✅ nRF Cloud API 接続テスト
+- ✅ GitHub API 経由でのファームウェア取得
+- ✅ REST API ラッパー実装
+- ⚠️ REST API アップロード（Developer プランでは制限あり）
+- ✅ 手動アップロードワークフロー文書化
+
+## 推奨ワークフロー
+
+1. **開発**: デバイスコードを変更・コミット
+2. **リリース**: Git tag を作成 → GitHub Actions が自動ビルド・公開
+3. **配信準備**: nRF Cloud ポータルで手動アップロード
+4. **デバイス更新**: FOTA ジョブを作成・実行
+
 ## 関連リンク
 
-- [nRF Cloud API ドキュメント](https://api.nrfcloud.com/)
-- [kid_gps_tracker リポジトリ](https://github.com/kid-gps-tracker-org/kid_gps_tracker)
 - [nRF Cloud Portal](https://nrfcloud.com/)
+- [nRF Cloud API ドキュメント](https://api-docs.nrfcloud.com/)
+- [kid_gps_tracker リポジトリ](https://github.com/kid-gps-tracker-org/kid_gps_tracker)
+- [kid_gps_tracker Releases](https://github.com/kid-gps-tracker-org/kid_gps_tracker/releases)
 
 ## ライセンス
 

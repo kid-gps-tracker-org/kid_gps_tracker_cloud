@@ -52,37 +52,55 @@ class NrfCloudAPI:
         if not bundle_path.exists():
             raise FileNotFoundError(f"Bundle not found: {bundle_path}")
 
-        with open(bundle_path, 'rb') as bundle_file:
-            files = {
-                'file': (bundle_path.name, bundle_file, 'application/zip')
-            }
+        # Step 1: Create firmware entry with JSON metadata
+        logger.info("Creating firmware entry...")
+        metadata = {
+            'name': f'kid_gps_tracker_{board}_v{version}',
+            'version': version,
+            'fwType': fw_type,
+            'description': description or f'Kid GPS Tracker v{version} for {board}',
+        }
 
-            data = {
-                'name': f'kid_gps_tracker_{board}_v{version}',
-                'version': version,
-                'fwType': fw_type,
-                'description': description or f'Kid GPS Tracker v{version} for {board}',
-                'board': board
-            }
+        response = requests.post(
+            f"{self.BASE_URL}/firmwares",
+            headers=self.headers,  # application/json
+            json=metadata,
+            timeout=30
+        )
 
-            # Note: When uploading files, we need multipart/form-data
-            # Remove Content-Type header to let requests set it automatically
-            headers = {"Authorization": f"Bearer {self.api_key}"}
+        if response.status_code not in [200, 201]:
+            logger.error(f"✗ Failed to create firmware entry: {response.status_code} - {response.text}")
+            raise Exception(f"Failed to create firmware entry: {response.status_code} - {response.text}")
 
-            response = requests.post(
-                f"{self.BASE_URL}/firmwares",
-                headers=headers,
-                data=data,
-                files=files,
-                timeout=300  # 5 minutes timeout for upload
+        result = response.json()
+        firmware_id = result.get('id') or result.get('bundleId') or result.get('firmwareId')
+        upload_url = result.get('uploadUrl') or result.get('url')
+
+        logger.info(f"✓ Firmware entry created: {firmware_id}")
+
+        # Step 2: Upload the binary file if upload URL is provided
+        if upload_url:
+            logger.info(f"Uploading binary to {upload_url}...")
+            with open(bundle_path, 'rb') as f:
+                binary_data = f.read()
+
+            upload_response = requests.put(
+                upload_url,
+                data=binary_data,
+                headers={'Content-Type': 'application/zip'},
+                timeout=300
             )
 
-        if response.status_code in [200, 201]:
-            logger.info(f"✓ Firmware uploaded: v{version} for {board}")
-            return response.json()
+            if upload_response.status_code not in [200, 201, 204]:
+                logger.error(f"✗ Binary upload failed: {upload_response.status_code}")
+                raise Exception(f"Binary upload failed: {upload_response.status_code}")
+
+            logger.info(f"✓ Binary uploaded successfully")
         else:
-            logger.error(f"✗ Upload failed: {response.status_code} - {response.text}")
-            raise Exception(f"Upload failed: {response.status_code} - {response.text}")
+            logger.info("No upload URL provided - firmware entry created without binary")
+
+        logger.info(f"✓ Firmware uploaded: v{version} for {board}")
+        return result
 
     def list_firmwares(self, limit: int = 10) -> list:
         """
