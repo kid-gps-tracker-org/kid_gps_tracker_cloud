@@ -52,54 +52,71 @@ class NrfCloudAPI:
         if not bundle_path.exists():
             raise FileNotFoundError(f"Bundle not found: {bundle_path}")
 
-        # Step 1: Create firmware entry with JSON metadata
-        logger.info("Creating firmware entry...")
-        metadata = {
-            'name': f'kid_gps_tracker_{board}_v{version}',
-            'version': version,
-            'fwType': fw_type,
-            'description': description or f'Kid GPS Tracker v{version} for {board}',
+        # Step 1: Fix manifest.json to add fwversion
+        logger.info("Fixing manifest.json...")
+        import zipfile
+        import tempfile
+        import json
+
+        fixed_bundle = Path(tempfile.gettempdir()) / f"{bundle_path.stem}_fixed.zip"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir_path = Path(tmpdir)
+
+            # Extract ZIP
+            with zipfile.ZipFile(bundle_path, 'r') as zip_in:
+                zip_in.extractall(tmpdir_path)
+
+            # Fix manifest.json
+            manifest_path = tmpdir_path / 'manifest.json'
+            with open(manifest_path, 'r') as f:
+                manifest = json.load(f)
+
+            manifest['fwversion'] = version
+            logger.info(f"✓ Added fwversion: {version}")
+
+            with open(manifest_path, 'w') as f:
+                json.dump(manifest, f, indent=4)
+
+            # Repackage ZIP
+            with zipfile.ZipFile(fixed_bundle, 'w', zipfile.ZIP_DEFLATED) as zip_out:
+                for file_path in tmpdir_path.iterdir():
+                    if file_path.is_file():
+                        zip_out.write(file_path, file_path.name)
+
+        # Step 2: Upload the fixed bundle
+        logger.info("Uploading firmware...")
+
+        with open(fixed_bundle, 'rb') as f:
+            binary_data = f.read()
+
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/zip"
         }
 
         response = requests.post(
             f"{self.BASE_URL}/firmwares",
-            headers=self.headers,  # application/json
-            json=metadata,
-            timeout=30
+            headers=headers,
+            data=binary_data,
+            timeout=300
         )
 
-        if response.status_code not in [200, 201]:
-            logger.error(f"✗ Failed to create firmware entry: {response.status_code} - {response.text}")
-            raise Exception(f"Failed to create firmware entry: {response.status_code} - {response.text}")
+        # Cleanup
+        fixed_bundle.unlink(missing_ok=True)
+
+        if response.status_code not in [200, 201, 202]:
+            logger.error(f"✗ Upload failed: {response.status_code} - {response.text}")
+            raise Exception(f"Upload failed: {response.status_code} - {response.text}")
 
         result = response.json()
-        firmware_id = result.get('id') or result.get('bundleId') or result.get('firmwareId')
-        upload_url = result.get('uploadUrl') or result.get('url')
-
-        logger.info(f"✓ Firmware entry created: {firmware_id}")
-
-        # Step 2: Upload the binary file if upload URL is provided
-        if upload_url:
-            logger.info(f"Uploading binary to {upload_url}...")
-            with open(bundle_path, 'rb') as f:
-                binary_data = f.read()
-
-            upload_response = requests.put(
-                upload_url,
-                data=binary_data,
-                headers={'Content-Type': 'application/zip'},
-                timeout=300
-            )
-
-            if upload_response.status_code not in [200, 201, 204]:
-                logger.error(f"✗ Binary upload failed: {upload_response.status_code}")
-                raise Exception(f"Binary upload failed: {upload_response.status_code}")
-
-            logger.info(f"✓ Binary uploaded successfully")
-        else:
-            logger.info("No upload URL provided - firmware entry created without binary")
+        uris = result.get('uris', [])
 
         logger.info(f"✓ Firmware uploaded: v{version} for {board}")
+        if uris:
+            logger.info(f"✓ Bundle URIs:")
+            for uri in uris:
+                logger.info(f"    {uri}")
         return result
 
     def list_firmwares(self, limit: int = 10) -> list:

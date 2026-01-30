@@ -113,9 +113,17 @@ def main():
                 description=f"Kid GPS Tracker v{version} for {args.board}"
             )
 
-            firmware_id = result.get('id') or result.get('bundleId')
+            # Bundle IDをURIsから抽出
+            uris = result.get('uris', [])
+            bundle_id = None
+            if uris:
+                # URI format: https://bundles.nrfcloud.com/<bundle-id>/...
+                parts = uris[0].split('/')
+                if len(parts) >= 4:
+                    bundle_id = parts[3]
+            firmware_id = result.get('id') or result.get('bundleId') or bundle_id
             logger.info(f"✅ アップロード成功！")
-            logger.info(f"   Firmware ID: {firmware_id}")
+            logger.info(f"   Bundle ID: {firmware_id}")
 
             # FOTA ジョブ作成（オプション）
             if args.create_fota_job and firmware_id:

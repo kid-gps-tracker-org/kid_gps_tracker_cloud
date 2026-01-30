@@ -12,15 +12,11 @@ GitHub Releases から nRF Cloud へのファームウェア管理機能を提�
 - ✅ GitHub API接続とファームウェア取得
 - ✅ nRF Cloud API接続テスト
 - ✅ GitHub Releasesからのファームウェアダウンロード
+- ✅ nRF Cloud REST API経由のファームウェアアップロード
 
-**制限事項:**
-- ⚠️ nRF Cloud Developer プランでは、REST API経由のファームウェアアップロードに制限があります
-- ⚠️ **推奨**: nRF Cloud ポータル経由での手動アップロードを使用してください
-
-### 対象ユーザー
-
-- **Developer プラン**: 手動アップロードワークフロー（推奨）
-- **Team/Enterprise プラン**: REST API自動アップロード（要検証）
+**注意事項:**
+- ZIPファイル内の `manifest.json` に `fwversion` フィールドが必要です（スクリプトが自動追加します）
+- アップロードには `Content-Type: application/zip` を使用します
 
 ## ディレクトリ構造
 
@@ -114,9 +110,7 @@ python test_api.py
 4. **Create Job** をクリック
 5. **Start Job** でFOTAを開始
 
-### 方法2: REST API自動アップロード（Team/Enterprise プラン向け）
-
-**注意**: Developer プランでは REST API アップロードが制限されている可能性があります。
+### 方法2: REST API自動アップロード（推奨）
 
 #### 基本的な使用方法
 
@@ -181,11 +175,17 @@ $ python upload_firmware.py --version v1.0.1 --create-fota-job
 
 ### エラー: "ValidationError[enum]: request.headers['content-type'] should be equal to one of the allowed values"
 
-**原因**: nRF Cloud Developer プランでは REST API経由のファームウェアアップロードが制限されています。
+**原因**: nRF Cloud API は特定の Content-Type のみ受け付けます。
 
-**解決策**:
-- 手動アップロードワークフロー（方法1）を使用してください
-- または、Team/Enterprise プランへのアップグレードを検討してください
+**許可される値**: `application/zip`, `application/octet-stream`, `text/plain`, `text/plain;charset=UTF8`, `text/plain;charset=ASCII`
+
+**解決策**: `upload_firmware.py` は `application/zip` を使用しています。直接 API を呼び出す場合は上記の値を使用してください。
+
+### エラー: "Invalid value undefined supplied to : FirmwareVersionValue"
+
+**原因**: ZIPファイル内の `manifest.json` に `fwversion` フィールドがありません。
+
+**解決策**: `upload_firmware.py` は自動的に `fwversion` を追加します。手動でアップロードする場合は、ZIPを展開して `manifest.json` に `"fwversion": "1.0.0"` を追加してください。
 
 ### エラー: "nRF Cloud API キーが指定されていません"
 
@@ -199,13 +199,9 @@ API キーの権限を確認してください。`firmware:write` 権限が必�
 
 指定されたバージョンに対応するファームウェアファイルが GitHub Releases に存在しません。バージョン番号を確認してください。
 
-### test_api.py が成功しても upload_firmware.py が失敗する
+### アップロードは成功したが "Firmware ID: None" と表示される
 
-これは正常な動作です。Developer プランでは:
-- ✅ API接続テスト（GET リクエスト）は成功します
-- ❌ ファームウェアアップロード（POST リクエスト）は制限されています
-
-→ **手動アップロードワークフロー**を使用してください。
+nRF Cloud API は `uris` フィールドでバンドル情報を返します。最新の `upload_firmware.py` ではURIから Bundle ID を自動抽出します。
 
 ## nRF Cloud でのファームウェア確認
 
@@ -228,18 +224,18 @@ API キーの権限を確認してください。`firmware:write` 権限が必�
 - ✅ GitHub Releases への自動公開
 - ✅ 日本語リリースノート自動生成
 
-### Phase 3: クラウド統合（部分完了）
+### Phase 3: クラウド統合（完了）
 - ✅ nRF Cloud API 接続テスト
 - ✅ GitHub API 経由でのファームウェア取得
 - ✅ REST API ラッパー実装
-- ⚠️ REST API アップロード（Developer プランでは制限あり）
-- ✅ 手動アップロードワークフロー文書化
+- ✅ REST API ファームウェアアップロード（manifest.json の fwversion 自動追加対応）
+- ✅ 手動/自動アップロードワークフロー文書化
 
 ## 推奨ワークフロー
 
 1. **開発**: デバイスコードを変更・コミット
 2. **リリース**: Git tag を作成 → GitHub Actions が自動ビルド・公開
-3. **配信準備**: nRF Cloud ポータルで手動アップロード
+3. **配信**: `python upload_firmware.py --version v1.0.0` で nRF Cloud へアップロード
 4. **デバイス更新**: FOTA ジョブを作成・実行
 
 ## 関連リンク
