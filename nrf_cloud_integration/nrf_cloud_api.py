@@ -206,3 +206,114 @@ class NrfCloudAPI:
             return response.json()
         else:
             raise Exception(f"Failed to get firmware: {response.status_code} - {response.text}")
+
+    # ---- 位置情報管理 ----
+
+    def get_location_history(
+        self,
+        device_id: str,
+        start: Optional[str] = None,
+        end: Optional[str] = None,
+        page_limit: int = 100,
+        page_next_token: Optional[str] = None
+    ) -> Dict:
+        """
+        デバイスの位置情報履歴を取得
+
+        Args:
+            device_id: デバイスID
+            start: 開始日時 (ISO 8601形式, 例: "2025-01-01T00:00:00.000Z")
+            end: 終了日時 (ISO 8601形式)
+            page_limit: 1ページあたりの最大件数
+            page_next_token: ページネーショントークン
+
+        Returns:
+            位置情報履歴 (items, total, pageNextToken)
+        """
+        params = {
+            "deviceId": device_id,
+            "pageLimit": page_limit,
+        }
+        if start:
+            params["start"] = start
+        if end:
+            params["end"] = end
+        if page_next_token:
+            params["pageNextToken"] = page_next_token
+
+        response = requests.get(
+            f"{self.BASE_URL}/location/history",
+            headers=self.headers,
+            params=params,
+            timeout=30
+        )
+
+        if response.status_code == 200:
+            return response.json()
+        else:
+            raise Exception(
+                f"Failed to get location history: {response.status_code} - {response.text}"
+            )
+
+    def get_all_location_history(
+        self,
+        device_id: str,
+        start: Optional[str] = None,
+        end: Optional[str] = None
+    ) -> list:
+        """
+        ページネーションを自動処理して全位置情報履歴を取得
+
+        Args:
+            device_id: デバイスID
+            start: 開始日時 (ISO 8601形式)
+            end: 終了日時 (ISO 8601形式)
+
+        Returns:
+            全位置情報レコードのリスト
+        """
+        all_items = []
+        page_next_token = None
+
+        while True:
+            result = self.get_location_history(
+                device_id=device_id,
+                start=start,
+                end=end,
+                page_limit=100,
+                page_next_token=page_next_token
+            )
+            items = result.get("items", [])
+            all_items.extend(items)
+
+            page_next_token = result.get("pageNextToken")
+            if not page_next_token:
+                break
+
+        return all_items
+
+    def delete_location_record(self, device_id: str, record_id: str) -> bool:
+        """
+        位置情報レコードを削除
+
+        Args:
+            device_id: デバイスID
+            record_id: レコードID (LocationTrackerId)
+
+        Returns:
+            削除成功の場合 True
+        """
+        response = requests.delete(
+            f"{self.BASE_URL}/location/history/{device_id}/{record_id}",
+            headers=self.headers,
+            timeout=30
+        )
+
+        if response.status_code == 202:
+            return True
+        else:
+            logger.error(
+                f"Failed to delete location record {record_id}: "
+                f"{response.status_code} - {response.text}"
+            )
+            return False

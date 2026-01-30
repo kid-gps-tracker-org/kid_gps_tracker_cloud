@@ -1,0 +1,52 @@
+name: Cleanup Location Data
+
+on:
+  schedule:
+    # 毎日 UTC 00:00 (JST 09:00) に実行
+    - cron: '0 0 * * *'
+  workflow_dispatch:
+    inputs:
+      device_id:
+        description: 'デバイスID (未指定時はsecretsのDEVICE_IDを使用)'
+        required: false
+      retention_hours:
+        description: 'データ保持時間'
+        required: false
+        default: '168'
+      dry_run:
+        description: 'ドライラン (true/false)'
+        required: false
+        default: 'false'
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -r nrf_cloud_integration/requirements.txt
+        working-directory: kid_gps_tracker_cloud
+
+      - name: Run location data cleanup
+        working-directory: kid_gps_tracker_cloud/nrf_cloud_integration
+        env:
+          NRF_CLOUD_API_KEY: ${{ secrets.NRF_CLOUD_API_KEY }}
+        run: |
+          DEVICE_ID="${{ github.event.inputs.device_id || secrets.DEVICE_ID }}"
+          RETENTION="${{ github.event.inputs.retention_hours || '168' }}"
+          DRY_RUN="${{ github.event.inputs.dry_run || 'false' }}"
+
+          ARGS="--device-id ${DEVICE_ID} --retention-hours ${RETENTION}"
+          if [ "${DRY_RUN}" = "true" ]; then
+            ARGS="${ARGS} --dry-run"
+          fi
+
+          python location_data_manager.py ${ARGS}
