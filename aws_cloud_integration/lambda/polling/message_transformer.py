@@ -43,6 +43,8 @@ def transform_message(raw_message: Dict) -> Optional[Dict]:
 
     if app_id == "GNSS":
         return _transform_gnss(device_id, received_at, message)
+    elif app_id == "GROUND_FIX":
+        return _transform_ground_fix(device_id, received_at, message)
     elif app_id == "TEMP":
         return _transform_temp(device_id, received_at, message)
     else:
@@ -97,6 +99,58 @@ def _transform_gnss(device_id: str, received_at: str, message: Dict) -> Optional
 
     if acc is not None:
         record["accuracy"] = acc
+
+    return record
+
+
+def _transform_ground_fix(device_id: str, received_at: str, message: Dict) -> Optional[Dict]:
+    """
+    GROUND_FIX メッセージ（セルラー測位結果）を DynamoDB レコードに変換する。
+    GNSS が利用できない場合（屋内等）に基地局測位の結果として送信される。
+
+    入力 (測位結果):
+        {"appId":"GROUND_FIX","ts":...,"data":{"lat":35.476,"lon":139.605,"uncertainty":214.6,"fulfilledWith":"MCELL"}}
+
+    入力 (測位リクエスト - スキップ):
+        {"appId":"GROUND_FIX","ts":...,"data":{"lte":[...]}}
+
+    出力:
+        GNSS と同じ形式の DynamoDB レコード (messageType="GROUND_FIX")
+    """
+    device_ts = message.get("ts")
+    data = message.get("data", {})
+
+    # 測位リクエスト（lte フィールドを含む）はスキップ
+    if isinstance(data, dict) and "lte" in data:
+        logger.debug(f"Skipping GROUND_FIX request message for device {device_id}")
+        return None
+
+    lat = data.get("lat") if isinstance(data, dict) else None
+    lon = data.get("lon") if isinstance(data, dict) else None
+    uncertainty = data.get("uncertainty") if isinstance(data, dict) else None
+    fulfilled_with = data.get("fulfilledWith") if isinstance(data, dict) else None
+
+    if lat is None or lon is None:
+        logger.warning(f"GROUND_FIX message missing lat/lon for device {device_id}")
+        return None
+
+    timestamp = _ts_to_iso8601(device_ts) if device_ts else received_at
+
+    record = {
+        "deviceId": device_id,
+        "timestamp": timestamp,
+        "messageType": "GROUND_FIX",
+        "lat": lat,
+        "lon": lon,
+        "deviceTs": device_ts,
+        "receivedAt": received_at,
+        "ttl": _calculate_ttl(device_ts),
+    }
+
+    if uncertainty is not None:
+        record["accuracy"] = uncertainty
+    if fulfilled_with:
+        record["fulfilledWith"] = fulfilled_with
 
     return record
 
@@ -161,12 +215,13 @@ def extract_device_state_update(record: Dict) -> Optional[Dict]:
         "updatedAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z"),
     }
 
-    if message_type == "GNSS":
+    if message_type in ("GNSS", "GROUND_FIX"):
         update["lastLocation"] = {
             "lat": record["lat"],
             "lon": record["lon"],
             "accuracy": record.get("accuracy"),
             "timestamp": record["timestamp"],
+            "source": message_type,
         }
     elif message_type == "TEMP":
         update["lastTemperature"] = {

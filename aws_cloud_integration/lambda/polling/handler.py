@@ -92,10 +92,12 @@ def lambda_handler(event, context):
         if received_at > latest_received_at:
             latest_received_at = received_at
 
+    gnss_count = sum(1 for r in records if r["messageType"] == "GNSS")
+    ground_fix_count = sum(1 for r in records if r["messageType"] == "GROUND_FIX")
+    temp_count = sum(1 for r in records if r["messageType"] == "TEMP")
     logger.info(
         f"Transformed {len(records)} records "
-        f"(GNSS: {sum(1 for r in records if r['messageType'] == 'GNSS')}, "
-        f"TEMP: {sum(1 for r in records if r['messageType'] == 'TEMP')})"
+        f"(GNSS: {gnss_count}, GROUND_FIX: {ground_fix_count}, TEMP: {temp_count})"
     )
 
     # 4. 結果出力
@@ -199,11 +201,12 @@ def _output_local(records, device_state_updates):
         device_id = record["deviceId"]
         timestamp = record["timestamp"]
 
-        if msg_type == "GNSS":
+        if msg_type in ("GNSS", "GROUND_FIX"):
+            source = f" ({record.get('fulfilledWith', '')})" if record.get("fulfilledWith") else ""
             print(
                 f"  [{msg_type}] {device_id} | {timestamp} | "
                 f"lat={record['lat']}, lon={record['lon']}, "
-                f"acc={record.get('accuracy', 'N/A')}"
+                f"acc={record.get('accuracy', 'N/A')}{source}"
             )
         elif msg_type == "TEMP":
             print(
