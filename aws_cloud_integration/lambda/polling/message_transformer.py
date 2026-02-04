@@ -4,6 +4,7 @@ nRF Cloud メッセージ → DynamoDB レコード変換モジュール
 interface_design.md セクション4 のデータ変換仕様に準拠。
 """
 from datetime import datetime, timezone
+from decimal import Decimal
 from typing import Dict, Optional
 import logging
 
@@ -90,15 +91,15 @@ def _transform_gnss(device_id: str, received_at: str, message: Dict) -> Optional
         "deviceId": device_id,
         "timestamp": timestamp,
         "messageType": "GNSS",
-        "lat": lat,
-        "lon": lon,
+        "lat": _to_decimal(lat),
+        "lon": _to_decimal(lon),
         "deviceTs": device_ts,
         "receivedAt": received_at,
         "ttl": _calculate_ttl(device_ts),
     }
 
     if acc is not None:
-        record["accuracy"] = acc
+        record["accuracy"] = _to_decimal(acc)
 
     return record
 
@@ -140,15 +141,15 @@ def _transform_ground_fix(device_id: str, received_at: str, message: Dict) -> Op
         "deviceId": device_id,
         "timestamp": timestamp,
         "messageType": "GROUND_FIX",
-        "lat": lat,
-        "lon": lon,
+        "lat": _to_decimal(lat),
+        "lon": _to_decimal(lon),
         "deviceTs": device_ts,
         "receivedAt": received_at,
         "ttl": _calculate_ttl(device_ts),
     }
 
     if uncertainty is not None:
-        record["accuracy"] = uncertainty
+        record["accuracy"] = _to_decimal(uncertainty)
     if fulfilled_with:
         record["fulfilledWith"] = fulfilled_with
 
@@ -186,7 +187,7 @@ def _transform_temp(device_id: str, received_at: str, message: Dict) -> Optional
         "deviceId": device_id,
         "timestamp": timestamp,
         "messageType": "TEMP",
-        "temperature": temperature,
+        "temperature": _to_decimal(temperature),
         "deviceTs": device_ts,
         "receivedAt": received_at,
         "ttl": _calculate_ttl(device_ts),
@@ -216,13 +217,15 @@ def extract_device_state_update(record: Dict) -> Optional[Dict]:
     }
 
     if message_type in ("GNSS", "GROUND_FIX"):
-        update["lastLocation"] = {
+        location = {
             "lat": record["lat"],
             "lon": record["lon"],
-            "accuracy": record.get("accuracy"),
             "timestamp": record["timestamp"],
             "source": message_type,
         }
+        if record.get("accuracy") is not None:
+            location["accuracy"] = record["accuracy"]
+        update["lastLocation"] = location
     elif message_type == "TEMP":
         update["lastTemperature"] = {
             "value": record["temperature"],
@@ -230,6 +233,17 @@ def extract_device_state_update(record: Dict) -> Optional[Dict]:
         }
 
     return update
+
+
+def _to_decimal(value):
+    """数値を Decimal に変換する (DynamoDB は float をサポートしない)"""
+    if value is None:
+        return None
+    if isinstance(value, float):
+        return Decimal(str(value))
+    if isinstance(value, int):
+        return Decimal(value)
+    return value
 
 
 def _ts_to_iso8601(ts_ms: int) -> str:

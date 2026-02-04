@@ -18,7 +18,16 @@ build/
 downloads/
 *.zip
 *.hex
-*.json
+
+# JSON (ダウンロード・一時ファイル)
+nrf_cloud_integration/**/*.json
+polling_state.json
+
+# CDK
+aws_cloud_integration/cdk/cdk.out/
+aws_cloud_integration/cdk/.build/
+aws_cloud_integration/cdk/.venv/
+aws_cloud_integration/cdk/cdk.context.json
 
 # IDE
 .vscode/
