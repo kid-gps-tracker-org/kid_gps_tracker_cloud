@@ -31,7 +31,7 @@ nRF Cloud
     │ REST API (ポーリング)
     ▼
 AWS
-├── EventBridge (1分間隔トリガー)
+├── EventBridge (5分間隔トリガー)
 ├── Lambda (ポーリング / API / セーフゾーン判定)
 ├── DynamoDB (データ保存)
 ├── API Gateway (REST API)
@@ -91,7 +91,7 @@ iPhone アプリ (Swift)
 | Lambda | nRF Cloud ポーリング / REST API ハンドラ / セーフゾーン判定 |
 | API Gateway (REST) | iPhone 向け REST API |
 | DynamoDB | 位置履歴・温度履歴・セーフゾーン定義・デバイス状態 |
-| EventBridge | Lambda 定期実行 (1分間隔) |
+| EventBridge | Lambda 定期実行 (5分間隔) |
 | SNS | APNs へのプッシュ通知送信 |
 
 #### 3.3.2 nRF Cloud → AWS 連携方式
@@ -99,7 +99,7 @@ iPhone アプリ (Swift)
 | 項目 | 仕様 |
 |---|---|
 | 方式 | REST API ポーリング |
-| ポーリング間隔 | 1分 |
+| ポーリング間隔 | 5分 |
 | 実行方法 | EventBridge → Lambda |
 | 認証 | nRF Cloud API キー (JWT) |
 | 重複排除 | 最終取得タイムスタンプで管理 |

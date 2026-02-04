@@ -139,13 +139,13 @@ class KidGpsTrackerStack(Stack):
         polling_state_table.grant_read_write_data(polling_function)
 
         # ============================================================
-        # EventBridge: 1分間隔のポーリングルール
+        # EventBridge: 5分間隔のポーリングルール
         # ============================================================
         polling_rule = events.Rule(
             self,
             "PollingSchedule",
             rule_name="kid-gps-tracker-polling-schedule",
-            schedule=events.Schedule.rate(Duration.minutes(1)),
+            schedule=events.Schedule.rate(Duration.minutes(5)),
             enabled=False,  # デプロイ後に手動で有効化
         )
         polling_rule.add_target(targets.LambdaFunction(polling_function))

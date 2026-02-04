@@ -361,7 +361,7 @@ pageNextToken が null になるまで繰り返す
 | 項目 | 値 |
 |---|---|
 | ランタイム | Python 3.12 |
-| トリガー | EventBridge (1分間隔) |
+| トリガー | EventBridge (5分間隔) |
 | タイムアウト | 60秒 |
 | メモリ | 256 MB |
 | 環境変数 | `NRF_CLOUD_API_KEY_SECRET_ARN` (Secrets Manager ARN) |
@@ -369,7 +369,7 @@ pageNextToken が null になるまで繰り返す
 ### 6.2 処理フロー
 
 ```
-1. EventBridge トリガー (毎分)
+1. EventBridge トリガー (5分間隔)
    │
 2. PollingState テーブルから lastPollTimestamp を取得
    │ (初回実行時は現在時刻 - 5分)
@@ -407,9 +407,9 @@ pageNextToken が null になるまで繰り返す
 | 条件 | 値 |
 |---|---|
 | デバイス数 | 10台 |
-| GNSS 間隔 | 5分 → 1分間に約2メッセージ (全10台合計) |
-| TEMP 間隔 | 1分 → 1分間に約10メッセージ (全10台合計) |
-| 1回のポーリングで取得 | **約12メッセージ** |
+| GNSS 間隔 | 5分 → 5分間に約10メッセージ (全10台合計) |
+| TEMP 間隔 | 1分 → 5分間に約50メッセージ (全10台合計) |
+| 1回のポーリングで取得 | **約60メッセージ** |
 | ページネーション | 不要 (pageLimit=100 で十分) |
 
 ---
@@ -869,7 +869,7 @@ FOTA ジョブのステータスを取得する。
 ```
 EventBridge          Lambda(Polling)      nRF Cloud API       DynamoDB
     │                     │                    │                  │
-    │─── 1分トリガー ──→│                    │                  │
+    │─── 5分トリガー ──→│                    │                  │
     │                     │                    │                  │
     │                     │── GetItem ────────────────────────→│
     │                     │←── lastPollTimestamp ──────────────│
@@ -987,7 +987,7 @@ KidGpsTrackerStack
 │   └── PollingState
 ├── API Gateway (REST API)
 │   └── /devices/* ルート
-├── EventBridge Rule (1分間隔)
+├── EventBridge Rule (5分間隔)
 ├── SNS Topic (kid-gps-tracker-alerts)
 ├── SNS Platform Application (APNs)
 └── Secrets Manager (nRF Cloud API Key)
@@ -1008,7 +1008,7 @@ KidGpsTrackerStack
 
 | 項目 | 試作 (10台) | 量産 (10万台) |
 |---|---|---|
-| ポーリング方式 | 1分ごとに全メッセージ一括取得 | デバイスグループ分割 or Message Routing に移行 |
+| ポーリング方式 | 5分ごとに全メッセージ一括取得 | デバイスグループ分割 or Message Routing に移行 |
 | DynamoDB | オンデマンドモード | プロビジョニングモード + Auto Scaling |
 | API Gateway | API Key 認証 | Cognito User Pool |
 | Lambda | 単一関数 | 機能ごとに分割 |
