@@ -74,7 +74,11 @@ def lambda_handler(event, context):
     latest_received_at = last_poll_timestamp
 
     for raw_message in messages:
-        record = transform_message(raw_message)
+        try:
+            record = transform_message(raw_message)
+        except Exception as e:
+            logger.warning(f"Failed to transform message: {e}")
+            record = None
         if record:
             records.append(record)
 

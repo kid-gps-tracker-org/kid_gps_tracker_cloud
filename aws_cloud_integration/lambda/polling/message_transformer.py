@@ -36,11 +36,12 @@ def transform_message(raw_message: Dict) -> Optional[Dict]:
     device_id = raw_message.get("deviceId")
     received_at = raw_message.get("receivedAt")
     message = raw_message.get("message", {})
-    app_id = message.get("appId")
 
-    if not device_id or not message:
-        logger.warning(f"Invalid message format: missing deviceId or message")
+    if not device_id or not isinstance(message, dict):
+        logger.warning(f"Invalid message format: missing deviceId or unexpected message type")
         return None
+
+    app_id = message.get("appId")
 
     if app_id == "GNSS":
         return _transform_gnss(device_id, received_at, message)
@@ -58,7 +59,7 @@ def _transform_gnss(device_id: str, received_at: str, message: Dict) -> Optional
     GNSS メッセージを DynamoDB レコードに変換する。
 
     入力:
-        {"appId":"GNSS","ts":1738577400000,"data":{"pvt":{"lat":35.6812,"lon":139.7671,"acc":10.5}}}
+        {"appId":"GNSS","ts":1738577400000,"data":{"lat":35.6812,"lon":139.7671,"acc":10.5}}
 
     出力:
         {
@@ -75,11 +76,10 @@ def _transform_gnss(device_id: str, received_at: str, message: Dict) -> Optional
     """
     device_ts = message.get("ts")
     data = message.get("data", {})
-    pvt = data.get("pvt", {})
 
-    lat = pvt.get("lat")
-    lon = pvt.get("lon")
-    acc = pvt.get("acc")
+    lat = data.get("lat")
+    lon = data.get("lon")
+    acc = data.get("acc")
 
     if lat is None or lon is None:
         logger.warning(f"GNSS message missing lat/lon for device {device_id}")
