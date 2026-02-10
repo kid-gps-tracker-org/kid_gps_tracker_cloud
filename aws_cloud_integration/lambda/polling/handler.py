@@ -1,77 +1,63 @@
 #!/usr/bin/env python3
 """
-ポーリング Lambda ハンドラ
-nRF Cloud REST API からデバイスメッセージを取得し、DynamoDB に保存する。
+Webhook Lambda ハンドラ
+nRF Cloud Message Routing からのWebhookを受信し、DynamoDB に保存する。
 
-ローカルモード (LOCAL_MODE=true):
-  - ポーリング状態をローカルファイル (polling_state.json) で管理
-  - 変換結果をコンソールに出力
-  - DynamoDB への書き込みをスキップ
-
-AWS モード (デフォルト):
-  - ポーリング状態を DynamoDB PollingState テーブルで管理
-  - 変換結果を DynamoDB DeviceMessages テーブルに書き込み
-  - DeviceState テーブルを更新
+nRF Cloud がデバイスメッセージをリアルタイムにPOSTしてくる。
+Function URL 経由で受信し、既存の message_transformer で変換後、DynamoDB に書き込む。
 """
 import os
 import json
 import logging
-from datetime import datetime, timezone, timedelta
-from pathlib import Path
 
-from nrf_cloud_client import NrfCloudClient
 from message_transformer import transform_message, extract_device_state_update
 
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
-# ローカルモードのポーリング状態ファイル
-POLLING_STATE_FILE = Path(__file__).parent / "polling_state.json"
-
-# 初回ポーリング時のデフォルト開始時刻（現在から何分前か）
-DEFAULT_LOOKBACK_MINUTES = 5
+TEAM_ID = os.environ.get("NRF_CLOUD_TEAM_ID", "")
 
 
 def lambda_handler(event, context):
     """
-    Lambda エントリーポイント
+    Lambda エントリーポイント (Function URL)
 
-    Args:
-        event: EventBridge イベント（ローカルモードでは空辞書）
-        context: Lambda コンテキスト（ローカルモードでは None）
-
-    Returns:
-        処理結果サマリー
+    nRF Cloud Message Routing からのPOSTリクエストを処理する。
+    - type: "system.verification" → 検証応答
+    - type: "device.messages" → メッセージ処理・DynamoDB書き込み
     """
-    local_mode = os.environ.get("LOCAL_MODE", "false").lower() == "true"
-    api_key = _get_api_key(local_mode)
+    logger.info(f"Received webhook event")
 
-    if not api_key:
-        logger.error("NRF_CLOUD_API_KEY is not set")
-        return {"statusCode": 500, "error": "API key not configured"}
-
-    client = NrfCloudClient(api_key)
-
-    # 1. 前回のポーリングタイムスタンプを取得
-    last_poll_timestamp = _get_last_poll_timestamp(local_mode)
-    logger.info(f"Polling messages since: {last_poll_timestamp}")
-
-    # 2. nRF Cloud API からメッセージ取得
+    body = event.get("body", "")
     try:
-        messages = client.get_all_messages(inclusive_start=last_poll_timestamp)
-    except Exception as e:
-        logger.error(f"Failed to fetch messages from nRF Cloud: {e}")
-        return {"statusCode": 502, "error": str(e)}
+        payload = json.loads(body) if isinstance(body, str) else body
+    except json.JSONDecodeError as e:
+        logger.error(f"Failed to parse body: {e}")
+        return _response(400, {"error": "Invalid JSON"})
 
-    if not messages:
-        logger.info("No new messages")
-        return {"statusCode": 200, "messagesProcessed": 0}
+    payload_type = payload.get("type", "")
+    logger.info(f"Payload type: {payload_type}")
 
-    logger.info(f"Fetched {len(messages)} messages from nRF Cloud")
+    # 検証リクエスト
+    if payload_type == "system.verification":
+        logger.info("Handling system verification request")
+        return _response(200, {"message": "OK"})
 
-    # 3. メッセージ変換
+    # デバイスメッセージ
+    if payload_type == "device.messages":
+        return _process_device_messages(payload)
+
+    logger.warning(f"Unknown payload type: {payload_type}")
+    return _response(200, {"message": "OK", "skipped": True})
+
+
+def _process_device_messages(payload: dict) -> dict:
+    """デバイスメッセージを処理してDynamoDBに保存する"""
+    messages = payload.get("messages", [])
+    logger.info(f"Processing {len(messages)} messages")
+
     records = []
     device_state_updates = {}
-    latest_received_at = last_poll_timestamp
 
     for raw_message in messages:
         try:
@@ -79,10 +65,10 @@ def lambda_handler(event, context):
         except Exception as e:
             logger.warning(f"Failed to transform message: {e}")
             record = None
+
         if record:
             records.append(record)
 
-            # DeviceState 更新データを蓄積（デバイスごとに最新のみ保持）
             state_update = extract_device_state_update(record)
             if state_update:
                 device_id = state_update["deviceId"]
@@ -90,11 +76,6 @@ def lambda_handler(event, context):
                     device_state_updates[device_id] = state_update
                 else:
                     _merge_device_state(device_state_updates[device_id], state_update)
-
-        # 最新の receivedAt を追跡
-        received_at = raw_message.get("receivedAt", "")
-        if received_at > latest_received_at:
-            latest_received_at = received_at
 
     gnss_count = sum(1 for r in records if r["messageType"] == "GNSS")
     ground_fix_count = sum(1 for r in records if r["messageType"] == "GROUND_FIX")
@@ -104,139 +85,30 @@ def lambda_handler(event, context):
         f"(GNSS: {gnss_count}, GROUND_FIX: {ground_fix_count}, TEMP: {temp_count})"
     )
 
-    # 4. 結果出力
-    if local_mode:
-        _output_local(records, device_state_updates)
-    else:
+    if records:
         _write_to_dynamodb(records, device_state_updates)
 
-    # 5. ポーリングタイムスタンプ更新
-    _update_last_poll_timestamp(latest_received_at, len(records), local_mode)
-
-    return {
-        "statusCode": 200,
+    return _response(200, {
+        "message": "OK",
         "messagesProcessed": len(records),
         "devicesUpdated": len(device_state_updates),
-        "lastReceivedAt": latest_received_at,
+    })
+
+
+def _response(status_code: int, body: dict) -> dict:
+    """Function URL レスポンスを構築する（nRF Cloud検証用ヘッダー付き）"""
+    return {
+        "statusCode": status_code,
+        "headers": {
+            "Content-Type": "application/json",
+            "x-nrfcloud-team-id": TEAM_ID,
+        },
+        "body": json.dumps(body),
     }
 
 
-def _get_api_key(local_mode: bool) -> str:
-    """API キーを取得する"""
-    if local_mode:
-        return os.environ.get("NRF_CLOUD_API_KEY", "")
-    else:
-        # AWS モード: Secrets Manager から取得
-        secret_arn = os.environ.get("NRF_CLOUD_API_KEY_SECRET_ARN")
-        if secret_arn:
-            import boto3
-            client = boto3.client("secretsmanager")
-            response = client.get_secret_value(SecretId=secret_arn)
-            return response["SecretString"]
-        return os.environ.get("NRF_CLOUD_API_KEY", "")
-
-
-def _get_last_poll_timestamp(local_mode: bool) -> str:
-    """前回のポーリングタイムスタンプを取得する"""
-    if local_mode:
-        return _get_last_poll_timestamp_local()
-    else:
-        return _get_last_poll_timestamp_dynamodb()
-
-
-def _get_last_poll_timestamp_local() -> str:
-    """ローカルファイルからポーリングタイムスタンプを取得"""
-    if POLLING_STATE_FILE.exists():
-        with open(POLLING_STATE_FILE, "r") as f:
-            state = json.load(f)
-            return state.get("lastPollTimestamp", _default_start_timestamp())
-    return _default_start_timestamp()
-
-
-def _get_last_poll_timestamp_dynamodb() -> str:
-    """DynamoDB からポーリングタイムスタンプを取得"""
-    import boto3
-    table_name = os.environ.get("POLLING_STATE_TABLE", "PollingState")
-    dynamodb = boto3.resource("dynamodb")
-    table = dynamodb.Table(table_name)
-
-    response = table.get_item(Key={"configKey": "polling"})
-    item = response.get("Item")
-    if item:
-        return item.get("lastPollTimestamp", _default_start_timestamp())
-    return _default_start_timestamp()
-
-
-def _update_last_poll_timestamp(timestamp: str, message_count: int, local_mode: bool):
-    """ポーリングタイムスタンプを更新する"""
-    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
-
-    if local_mode:
-        state = {
-            "lastPollTimestamp": timestamp,
-            "lastPollExecutedAt": now,
-            "messageCount": message_count,
-        }
-        with open(POLLING_STATE_FILE, "w") as f:
-            json.dump(state, f, indent=2)
-        logger.info(f"Updated polling state: {POLLING_STATE_FILE}")
-    else:
-        import boto3
-        table_name = os.environ.get("POLLING_STATE_TABLE", "PollingState")
-        dynamodb = boto3.resource("dynamodb")
-        table = dynamodb.Table(table_name)
-
-        table.put_item(Item={
-            "configKey": "polling",
-            "lastPollTimestamp": timestamp,
-            "lastPollExecutedAt": now,
-            "messageCount": message_count,
-        })
-
-
-def _output_local(records, device_state_updates):
-    """ローカルモード: 変換結果をコンソールに出力"""
-    print("\n" + "=" * 70)
-    print("  DeviceMessages Records")
-    print("=" * 70)
-
-    for record in records:
-        msg_type = record["messageType"]
-        device_id = record["deviceId"]
-        timestamp = record["timestamp"]
-
-        if msg_type in ("GNSS", "GROUND_FIX"):
-            source = f" ({record.get('fulfilledWith', '')})" if record.get("fulfilledWith") else ""
-            print(
-                f"  [{msg_type}] {device_id} | {timestamp} | "
-                f"lat={record['lat']}, lon={record['lon']}, "
-                f"acc={record.get('accuracy', 'N/A')}{source}"
-            )
-        elif msg_type == "TEMP":
-            print(
-                f"  [{msg_type}] {device_id} | {timestamp} | "
-                f"temp={record['temperature']}C"
-            )
-
-    print("\n" + "=" * 70)
-    print("  DeviceState Updates")
-    print("=" * 70)
-
-    for device_id, state in device_state_updates.items():
-        print(f"  Device: {device_id}")
-        if "lastLocation" in state:
-            loc = state["lastLocation"]
-            print(f"    Location: lat={loc['lat']}, lon={loc['lon']}")
-        if "lastTemperature" in state:
-            temp = state["lastTemperature"]
-            print(f"    Temperature: {temp['value']}C")
-        print(f"    Last seen: {state['lastSeen']}")
-
-    print("=" * 70 + "\n")
-
-
 def _write_to_dynamodb(records, device_state_updates):
-    """AWS モード: DynamoDB にレコードを書き込む"""
+    """DynamoDB にレコードを書き込む"""
     import boto3
     from botocore.exceptions import ClientError
 
@@ -309,9 +181,3 @@ def _merge_device_state(existing: dict, new: dict):
         existing["lastTemperature"] = new["lastTemperature"]
     existing["lastSeen"] = new["lastSeen"]
     existing["updatedAt"] = new["updatedAt"]
-
-
-def _default_start_timestamp() -> str:
-    """初回ポーリング時のデフォルト開始タイムスタンプ"""
-    dt = datetime.now(timezone.utc) - timedelta(minutes=DEFAULT_LOOKBACK_MINUTES)
-    return dt.strftime("%Y-%m-%dT%H:%M:%S.000Z")

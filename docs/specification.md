@@ -5,8 +5,9 @@
 | 項目 | 内容 |
 |---|---|
 | 文書名 | Kid GPS Tracker システム仕様書 |
-| バージョン | 1.0 |
+| バージョン | 1.1 |
 | 作成日 | 2026-02-03 |
+| 更新日 | 2026-02-10 |
 | ステータス | 試作仕様確定 |
 
 ---
@@ -28,11 +29,10 @@ nRF9151DK (GNSS/温度センサー)
     ▼
 nRF Cloud
     │
-    │ REST API (ポーリング)
+    │ Message Routing (Webhook)
     ▼
 AWS
-├── EventBridge (5分間隔トリガー)
-├── Lambda (ポーリング / API / セーフゾーン判定)
+├── Lambda (Webhook受信 / API / セーフゾーン判定)
 ├── DynamoDB (データ保存)
 ├── API Gateway (REST API)
 └── SNS → APNs (プッシュ通知)
@@ -46,8 +46,8 @@ iPhone アプリ (Swift)
 
 | データ | フロー |
 |---|---|
-| GNSS 位置情報 | nRF9151DK → nRF Cloud → AWS Lambda → DynamoDB → iPhone |
-| 温度情報 | nRF9151DK → nRF Cloud → AWS Lambda → DynamoDB → iPhone |
+| GNSS 位置情報 | nRF9151DK → nRF Cloud → (Webhook) → AWS Lambda → DynamoDB → iPhone |
+| 温度情報 | nRF9151DK → nRF Cloud → (Webhook) → AWS Lambda → DynamoDB → iPhone |
 | セーフゾーンアラート | AWS Lambda (判定) → SNS → APNs → iPhone |
 | セーフゾーン設定 | iPhone → API Gateway → Lambda → DynamoDB |
 | FOTA | nRF Cloud で管理 |
@@ -77,7 +77,7 @@ iPhone アプリ (Swift)
 | 項目 | 仕様 |
 |---|---|
 | 接続方式 | Device-to-Cloud (MQTT) |
-| 利用サービス | デバイスメッセージ、A-GNSS、P-GPS、FOTA |
+| 利用サービス | デバイスメッセージ、Message Routing (Webhook)、A-GNSS、P-GPS、FOTA |
 | プラン | 試作: Developer (10台無料) |
 | 量産プラン | Enterprise (Nordic と個別契約、10万台以上想定) |
 | メッセージ保持期間 | 30日 |
@@ -88,21 +88,21 @@ iPhone アプリ (Swift)
 
 | サービス | 用途 |
 |---|---|
-| Lambda | nRF Cloud ポーリング / REST API ハンドラ / セーフゾーン判定 |
+| Lambda | nRF Cloud Webhook 受信 / REST API ハンドラ / セーフゾーン判定 |
 | API Gateway (REST) | iPhone 向け REST API |
 | DynamoDB | 位置履歴・温度履歴・セーフゾーン定義・デバイス状態 |
-| EventBridge | Lambda 定期実行 (5分間隔) |
 | SNS | APNs へのプッシュ通知送信 |
 
 #### 3.3.2 nRF Cloud → AWS 連携方式
 
 | 項目 | 仕様 |
 |---|---|
-| 方式 | REST API ポーリング |
-| ポーリング間隔 | 5分 |
-| 実行方法 | EventBridge → Lambda |
-| 認証 | nRF Cloud API キー (JWT) |
-| 重複排除 | 最終取得タイムスタンプで管理 |
+| 方式 | nRF Cloud Message Routing (Webhook) |
+| データ配信 | nRF Cloud → Lambda Function URL (リアルタイム HTTP POST) |
+| 配信カテゴリ | `device_messages`, `location` |
+| 認証 | `x-nrfcloud-team-id` レスポンスヘッダーによる自動検証 |
+| 重複排除 | DynamoDB 条件付き書き込み (同一 PK+SK はスキップ) |
+| AWS側遅延 | 約1〜2秒（ポーリング方式の最大5分から大幅改善） |
 
 #### 3.3.3 DynamoDB テーブル設計 (概要)
 
@@ -151,7 +151,7 @@ iPhone アプリ (Swift)
 #### 3.3.5 セーフゾーン判定ロジック
 
 ```
-1. Lambda がポーリングで新しい位置情報を取得
+1. Lambda が Webhook で新しい位置情報を受信
 2. 該当デバイスのセーフゾーン定義を DynamoDB から取得
 3. 位置座標とセーフゾーン中心座標の距離を計算
 4. 距離 > 半径 の場合、ゾーン外と判定
@@ -219,7 +219,7 @@ iPhone アプリ (Swift)
 |---|---|
 | 想定台数 | 10万台以上 |
 | nRF Cloud | 継続利用 (Enterprise プラン) |
-| アーキテクチャ | 試作時と同一構成を維持 |
+| アーキテクチャ | 試作時と同一構成を維持 (Message Routing を引き続き使用) |
 
 ---
 
@@ -244,7 +244,7 @@ kid_gps_tracker_backend/
 ├── aws/                        # 新規: AWS インフラ + Lambda
 │   ├── cdk/                    # AWS CDK インフラ定義
 │   ├── lambda/
-│   │   ├── polling/            # nRF Cloud ポーリング Lambda
+│   │   ├── polling/            # nRF Cloud Webhook 受信 Lambda
 │   │   ├── api/                # iPhone 向け REST API Lambda
 │   │   └── geofence/           # セーフゾーン判定 Lambda
 │   └── ...

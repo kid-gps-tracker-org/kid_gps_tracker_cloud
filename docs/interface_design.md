@@ -5,22 +5,23 @@
 | 項目 | 内容 |
 |---|---|
 | 文書名 | nRF Cloud ↔ AWS インターフェース設計書 |
-| バージョン | 1.0 |
+| バージョン | 1.1 |
 | 作成日 | 2026-02-03 |
+| 更新日 | 2026-02-10 |
 | 関連文書 | [システム仕様書](specification.md) |
 
 ---
 
 ## 1. 概要
 
-本文書は、nRF Cloud REST API と AWS 間のインターフェースを定義する。
-nRF9151DK デバイスが nRF Cloud に送信した GNSS 位置情報・温度情報を AWS Lambda で定期取得し、
-DynamoDB に保存、セーフゾーン判定を行い、iPhone アプリに提供するまでの全データフローを規定する。
+本文書は、nRF Cloud と AWS 間のインターフェースを定義する。
+nRF9151DK デバイスが nRF Cloud に送信した GNSS 位置情報・温度情報を、nRF Cloud Message Routing (Webhook) 経由で
+AWS Lambda にリアルタイム配信し、DynamoDB に保存、セーフゾーン判定を行い、iPhone アプリに提供するまでの全データフローを規定する。
 
 ### 1.1 対象範囲
 
 ```
-nRF Cloud REST API ←→ AWS Lambda (ポーリング)
+nRF Cloud Message Routing (Webhook) → AWS Lambda (Function URL)
 AWS Lambda ←→ DynamoDB
 AWS Lambda ←→ SNS ←→ APNs
 API Gateway ←→ AWS Lambda ←→ DynamoDB
@@ -44,76 +45,71 @@ API Gateway ←→ AWS Lambda ←→ nRF Cloud REST API (FOTA)
 
 | # | メソッド | エンドポイント | 用途 | 呼び出し元 |
 |---|---|---|---|---|
-| 1 | GET | `/v1/messages` | デバイスメッセージ取得 | ポーリング Lambda |
-| 2 | GET | `/v1/devices` | デバイス一覧取得 | API Lambda |
-| 3 | GET | `/v1/devices/{deviceId}` | デバイス詳細（Shadow含む） | API Lambda |
-| 4 | POST | `/v1/fota-jobs` | FOTA ジョブ作成 | API Lambda |
-| 5 | GET | `/v1/fota-jobs/{jobId}` | FOTA ジョブステータス取得 | API Lambda |
-| 6 | GET | `/v1/firmwares` | ファームウェア一覧取得 | API Lambda |
+| 1 | GET | `/v1/devices` | デバイス一覧取得 | API Lambda |
+| 2 | GET | `/v1/devices/{deviceId}` | デバイス詳細（Shadow含む） | API Lambda |
+| 3 | POST | `/v1/fota-jobs` | FOTA ジョブ作成 | API Lambda |
+| 4 | GET | `/v1/fota-jobs/{jobId}` | FOTA ジョブステータス取得 | API Lambda |
+| 5 | GET | `/v1/firmwares` | ファームウェア一覧取得 | API Lambda |
 
-### 2.3 メッセージ取得 API 詳細
+> **注記**: デバイスメッセージの取得は REST API ポーリング (`GET /v1/messages`) から
+> nRF Cloud Message Routing (Webhook) に移行済み。詳細はセクション 2.3 を参照。
 
-#### リクエスト
+### 2.3 nRF Cloud Message Routing (Webhook)
 
-```
-GET /v1/messages?inclusiveStart={ISO8601}&pageLimit=100
-```
+デバイスメッセージは nRF Cloud Message Routing により、リアルタイムに AWS Lambda Function URL へ HTTP POST される。
 
-| パラメータ | 型 | 必須 | 説明 |
-|---|---|---|---|
-| `inclusiveStart` | String (ISO 8601) | Yes | この時刻以降のメッセージを取得 |
-| `pageLimit` | Integer | No | 1ページあたりの最大件数 (デフォルト: 100) |
-| `pageNextToken` | String | No | ページネーション用トークン |
-| `appId` | String | No | フィルタ (GNSS, TEMP 等) |
-| `deviceId` | String | No | 特定デバイスのみ取得 |
+#### 基本仕様
 
-#### レスポンス
+| 項目 | 値 |
+|---|---|
+| Message Routing API | `https://api.message-routing.nrfcloud.com/v2` |
+| 配信方式 | Webhook (HTTP POST) |
+| 受信先 | Lambda Function URL (認証なし) |
+| 配信カテゴリ | `device_messages`, `location` |
+| 検証方式 | `x-nrfcloud-team-id` レスポンスヘッダーによる自動検証 |
+
+#### Webhook ペイロード形式
+
+**デバイスメッセージ配信:**
 
 ```json
 {
-  "items": [
+  "type": "device.messages",
+  "messages": [
     {
-      "deviceId": "nrf-352656100123456",
-      "receivedAt": "2026-02-03T10:30:00.000Z",
-      "message": {
-        "appId": "GNSS",
-        "ts": 1738577400000,
-        "data": {
-          "pvt": {
-            "lat": 35.6812,
-            "lon": 139.7671,
-            "acc": 10.5
-          }
-        }
-      }
-    },
-    {
-      "deviceId": "nrf-352656100123456",
-      "receivedAt": "2026-02-03T10:30:05.000Z",
+      "teamId": "80ea9eb0-c769-4deb-9a97-06ef4e91aff7",
+      "deviceId": "nrf-359404230006463",
+      "messageId": "msg-uuid",
+      "topic": "prod/{teamId}/m/d/{deviceId}/d2c",
       "message": {
         "appId": "TEMP",
         "messageType": "DATA",
         "ts": 1738577405000,
         "data": 23.5
-      }
+      },
+      "receivedAt": "2026-02-10T04:49:17.233Z"
     }
   ],
-  "total": 150,
-  "pageNextToken": "eyJhbGciOi..."
+  "timestamp": "2026-02-10T04:49:17.500Z"
 }
 ```
 
-#### ページネーション処理
+**自動検証リクエスト (destination 登録時):**
 
+```json
+{
+  "type": "system.verification",
+  "messages": [{"verificationToken": "688138"}],
+  "timestamp": "2026-02-10T04:48:26.000Z"
+}
 ```
-最初のリクエスト:
-  GET /v1/messages?inclusiveStart={lastPollTimestamp}&pageLimit=100
 
-pageNextToken が返された場合:
-  GET /v1/messages?inclusiveStart={lastPollTimestamp}&pageLimit=100&pageNextToken={token}
+#### メッセージカテゴリ
 
-pageNextToken が null になるまで繰り返す
-```
+| カテゴリ | 配信内容 |
+|---|---|
+| `device_messages` | TEMP、LOG 等のデバイス送信メッセージ |
+| `location` | GNSS、GROUND_FIX の位置情報メッセージ |
 
 ---
 
@@ -126,11 +122,9 @@ pageNextToken が null になるまで繰り返す
   "appId": "GNSS",
   "ts": 1738577400000,
   "data": {
-    "pvt": {
-      "lat": 35.6812,
-      "lon": 139.7671,
-      "acc": 10.5
-    }
+    "lat": 35.6812,
+    "lon": 139.7671,
+    "acc": 10.5
   }
 }
 ```
@@ -139,9 +133,9 @@ pageNextToken が null になるまで繰り返す
 |---|---|---|---|
 | `appId` | String | - | 固定値 `"GNSS"` |
 | `ts` | Integer (int64) | ミリ秒 | Unix エポックからのミリ秒 |
-| `data.pvt.lat` | Float | 度 | 緯度 (WGS-84) |
-| `data.pvt.lon` | Float | 度 | 経度 (WGS-84) |
-| `data.pvt.acc` | Float | メートル | 水平精度 (2D 1-sigma) |
+| `data.lat` | Float | 度 | 緯度 (WGS-84) |
+| `data.lon` | Float | 度 | 経度 (WGS-84) |
+| `data.acc` | Float | メートル | 水平精度 (2D 1-sigma) |
 
 **サンプリング間隔:** 300秒 (5分)
 
@@ -193,7 +187,7 @@ pageNextToken が null になるまで繰り返す
   "message": {
     "appId": "GNSS",
     "ts": 1738577400000,
-    "data": {"pvt": {"lat": 35.6812, "lon": 139.7671, "acc": 10.5}}
+    "data": {"lat": 35.6812, "lon": 139.7671, "acc": 10.5}
   }
 }
 
@@ -272,9 +266,9 @@ pageNextToken が null になるまで繰り返す
 | `message.ts` | `timestamp` | ISO 8601 文字列に変換 (SK に使用) |
 | `receivedAt` | `receivedAt` | そのまま保存 |
 | `message.appId` | `messageType` | そのまま保存 |
-| `message.data.pvt.lat` | `lat` | そのまま保存 |
-| `message.data.pvt.lon` | `lon` | そのまま保存 |
-| `message.data.pvt.acc` | `accuracy` | そのまま保存 |
+| `message.data.lat` | `lat` | そのまま保存 |
+| `message.data.lon` | `lon` | そのまま保存 |
+| `message.data.acc` | `accuracy` | そのまま保存 |
 | `message.data` (TEMP) | `temperature` | そのまま保存 |
 | (計算値) | `ttl` | `deviceTs/1000 + 30*24*3600` (30日後の Unix 秒) |
 
@@ -341,76 +335,74 @@ pageNextToken が null になるまで繰り返す
 | `createdAt` | String | - | 作成日時 |
 | `updatedAt` | String | - | 更新日時 |
 
-### 5.4 PollingState テーブル
+### 5.4 PollingState テーブル（廃止）
 
-ポーリングの状態管理。
+> **廃止**: Webhook 方式への移行に伴い不要となった。テーブルは RETAIN ポリシーで残存するが、
+> 新規書き込みは行われない。
 
-| 属性 | 型 | キー | 説明 |
-|---|---|---|---|
-| `configKey` | String | PK | 固定値 `"polling"` |
-| `lastPollTimestamp` | String | - | 最終取得メッセージの ISO 8601 タイムスタンプ |
-| `lastPollExecutedAt` | String | - | 最終ポーリング実行時刻 |
-| `messageCount` | Number | - | 累計取得メッセージ数 |
+~~ポーリングの状態管理。~~
 
 ---
 
-## 6. ポーリング Lambda 設計
+## 6. Webhook Lambda 設計
 
 ### 6.1 基本仕様
 
 | 項目 | 値 |
 |---|---|
 | ランタイム | Python 3.12 |
-| トリガー | EventBridge (5分間隔) |
-| タイムアウト | 60秒 |
+| トリガー | nRF Cloud Message Routing → Lambda Function URL (HTTP POST) |
+| タイムアウト | 30秒 |
 | メモリ | 256 MB |
-| 環境変数 | `NRF_CLOUD_API_KEY_SECRET_ARN` (Secrets Manager ARN) |
+| 同時実行数 | 1 (予約) |
+| 環境変数 | `NRF_CLOUD_TEAM_ID`, `DEVICE_MESSAGES_TABLE`, `DEVICE_STATE_TABLE`, `NRF_CLOUD_API_KEY_SECRET_ARN` |
 
 ### 6.2 処理フロー
 
 ```
-1. EventBridge トリガー (5分間隔)
+1. nRF Cloud から HTTP POST を受信 (Function URL)
    │
-2. PollingState テーブルから lastPollTimestamp を取得
-   │ (初回実行時は現在時刻 - 5分)
+2. リクエストボディをパース
    │
-3. nRF Cloud REST API 呼び出し
-   │ GET /v1/messages?inclusiveStart={lastPollTimestamp}&pageLimit=100
-   │ ※ pageNextToken がある限りループ
+3. ペイロードタイプで分岐
+   │ ├── "system.verification" → 200 + x-nrfcloud-team-id ヘッダーを返して終了
+   │ └── "device.messages" → メッセージ処理へ
    │
-4. メッセージを appId で分類
+4. payload.messages をループし、各メッセージを appId で変換
    │ ├── GNSS → GNSS 変換処理
+   │ ├── GROUND_FIX → GROUND_FIX 変換処理 (測位結果のみ、リクエストはスキップ)
    │ ├── TEMP → TEMP 変換処理
    │ └── その他 → ログ出力のみ (将来拡張用)
    │
-5. DynamoDB 書き込み (BatchWriteItem)
-   │ ├── DeviceMessages テーブルにレコード追加
+5. DynamoDB 書き込み
+   │ ├── DeviceMessages テーブルにレコード追加 (条件付き書き込みで重複排除)
    │ └── DeviceState テーブルの最新状態を更新
    │
-6. GNSS メッセージがある場合 → セーフゾーン判定 (セクション7)
+6. GNSS/GROUND_FIX メッセージがある場合 → セーフゾーン判定 (セクション7)
    │
-7. PollingState テーブルの lastPollTimestamp を更新
-   │ (取得したメッセージの最新 receivedAt + 1ミリ秒)
-   │
-8. 完了
+7. 200 + x-nrfcloud-team-id ヘッダーを返して完了
 ```
 
 ### 6.3 重複排除
 
 | 方式 | 説明 |
 |---|---|
-| タイムスタンプベース | `lastPollTimestamp` 以降のメッセージのみ取得 |
-| DynamoDB 条件付き書き込み | 同一 PK+SK のレコードが存在する場合はスキップ |
+| DynamoDB 条件付き書き込み | 同一 PK(deviceId)+SK(timestamp) のレコードが存在する場合はスキップ |
 
-### 6.4 メッセージ数の見積もり
+### 6.4 レスポンス形式
 
-| 条件 | 値 |
-|---|---|
-| デバイス数 | 10台 |
-| GNSS 間隔 | 5分 → 5分間に約10メッセージ (全10台合計) |
-| TEMP 間隔 | 1分 → 5分間に約50メッセージ (全10台合計) |
-| 1回のポーリングで取得 | **約60メッセージ** |
-| ページネーション | 不要 (pageLimit=100 で十分) |
+すべてのレスポンスに `x-nrfcloud-team-id` ヘッダーを含める (nRF Cloud 自動検証用)。
+
+```json
+{
+  "statusCode": 200,
+  "headers": {
+    "Content-Type": "application/json",
+    "x-nrfcloud-team-id": "{TEAM_ID}"
+  },
+  "body": "{\"message\":\"OK\",\"messagesProcessed\":3,\"devicesUpdated\":1}"
+}
+```
 
 ---
 
@@ -419,7 +411,7 @@ pageNextToken が null になるまで繰り返す
 ### 7.1 判定フロー
 
 ```
-1. ポーリングで新しい GNSS メッセージを検出
+1. Webhook で新しい GNSS/GROUND_FIX メッセージを受信
    │
 2. 該当 deviceId の SafeZones を DynamoDB から取得
    │ (enabled=true のゾーンのみ)
@@ -828,15 +820,15 @@ FOTA ジョブのステータスを取得する。
 
 ## 9. エラー処理
 
-### 9.1 ポーリング Lambda のエラー処理
+### 9.1 Webhook Lambda のエラー処理
 
 | エラー | 対応 |
 |---|---|
-| nRF Cloud API 接続失敗 | lastPollTimestamp を更新しない → 次回リトライ |
-| nRF Cloud API 401 | CloudWatch アラーム → API キー期限切れ通知 |
-| nRF Cloud API 429 (レート制限) | 処理中断、次回ポーリングで再取得 |
-| DynamoDB 書き込み失敗 | 個別メッセージのリトライ (最大3回) |
-| Lambda タイムアウト | lastPollTimestamp を更新しない → 次回再取得 |
+| Webhook ペイロード JSON パースエラー | 400 を返却、ログ出力 |
+| メッセージ変換失敗 | 該当メッセージをスキップ、他のメッセージは処理継続 |
+| DynamoDB 書き込み失敗 | 個別メッセージのエラーをログ出力、他のメッセージは処理継続 |
+| DynamoDB 重複レコード | 条件付き書き込みで自動スキップ (正常動作) |
+| Lambda タイムアウト | nRF Cloud が DLQ にメッセージを保存、再配信される |
 
 ### 9.2 API Lambda のエラー処理
 
@@ -864,38 +856,34 @@ FOTA ジョブのステータスを取得する。
 
 ## 10. シーケンス図
 
-### 10.1 定期ポーリングフロー
+### 10.1 Webhook メッセージ受信フロー
 
 ```
-EventBridge          Lambda(Polling)      nRF Cloud API       DynamoDB
-    │                     │                    │                  │
-    │─── 5分トリガー ──→│                    │                  │
-    │                     │                    │                  │
-    │                     │── GetItem ────────────────────────→│
-    │                     │←── lastPollTimestamp ──────────────│
-    │                     │                    │                  │
-    │                     │── GET /messages ──→│                  │
-    │                     │←── items[] ────────│                  │
-    │                     │                    │                  │
-    │                     │── (ページネーション繰り返し) ──→│     │
-    │                     │←── items[] ────────│                  │
-    │                     │                    │                  │
-    │                     │── 変換処理          │                  │
-    │                     │                    │                  │
-    │                     │── BatchWriteItem (DeviceMessages) ─→│
+nRF Cloud              Lambda(Webhook)                       DynamoDB
+    │                     │                                     │
+    │── POST (Webhook) ──→│                                     │
+    │   {type:            │                                     │
+    │    device.messages} │                                     │
+    │                     │── メッセージ変換                      │
+    │                     │   (GNSS/GROUND_FIX/TEMP)            │
+    │                     │                                     │
+    │                     │── PutItem (DeviceMessages) ────────→│
+    │                     │   ※ 条件付き書き込み (重複排除)       │
     │                     │── UpdateItem (DeviceState) ────────→│
-    │                     │                    │                  │
-    │                     │── セーフゾーン判定   │                  │
-    │                     │   (GNSS メッセージ時)│                  │
-    │                     │                    │                  │
-    │                     │── UpdateItem (PollingState) ───────→│
-    │                     │                    │                  │
+    │                     │                                     │
+    │                     │── セーフゾーン判定                    │
+    │                     │   (GNSS/GROUND_FIX メッセージ時)     │
+    │                     │                                     │
+    │←── 200 OK ──────────│                                     │
+    │   + x-nrfcloud-     │                                     │
+    │     team-id ヘッダー │                                     │
+    │                     │                                     │
 ```
 
 ### 10.2 セーフゾーンアラートフロー
 
 ```
-Lambda(Polling)      DynamoDB           SNS              APNs           iPhone
+Lambda(Webhook)      DynamoDB           SNS              APNs           iPhone
     │                  │                 │                 │               │
     │── Query ────────→│                 │                 │               │
     │   (SafeZones)    │                 │                 │               │
@@ -978,16 +966,15 @@ iPhone              API Gateway        Lambda(API)     nRF Cloud API     DynamoD
 ```
 KidGpsTrackerStack
 ├── Lambda Functions
-│   ├── PollingFunction (nRF Cloud ポーリング + セーフゾーン判定)
+│   ├── WebhookFunction (nRF Cloud Webhook 受信 + セーフゾーン判定)
+│   │   └── Function URL (認証なし、nRF Cloud からの HTTP POST 用)
 │   └── ApiFunction (iPhone 向け REST API + FOTA)
 ├── DynamoDB Tables
 │   ├── DeviceMessages (TTL 有効)
 │   ├── DeviceState
-│   ├── SafeZones
-│   └── PollingState
+│   └── SafeZones
 ├── API Gateway (REST API)
 │   └── /devices/* ルート
-├── EventBridge Rule (5分間隔)
 ├── SNS Topic (kid-gps-tracker-alerts)
 ├── SNS Platform Application (APNs)
 └── Secrets Manager (nRF Cloud API Key)
@@ -995,12 +982,13 @@ KidGpsTrackerStack
 
 ### 11.2 Lambda 共通設定
 
-| 項目 | PollingFunction | ApiFunction |
+| 項目 | WebhookFunction | ApiFunction |
 |---|---|---|
 | ランタイム | Python 3.12 | Python 3.12 |
-| メモリ | 256 MB | 128 MB |
-| タイムアウト | 60秒 | 30秒 |
+| メモリ | 256 MB | 256 MB |
+| タイムアウト | 30秒 | 30秒 |
 | 同時実行数 | 1 (予約) | 10 |
+| トリガー | Function URL (nRF Cloud Webhook) | API Gateway |
 
 ---
 
@@ -1008,7 +996,7 @@ KidGpsTrackerStack
 
 | 項目 | 試作 (10台) | 量産 (10万台) |
 |---|---|---|
-| ポーリング方式 | 5分ごとに全メッセージ一括取得 | デバイスグループ分割 or Message Routing に移行 |
+| メッセージ配信 | Message Routing (Webhook、1 destination) | Message Routing (複数 destination、負荷分散) |
 | DynamoDB | オンデマンドモード | プロビジョニングモード + Auto Scaling |
 | API Gateway | API Key 認証 | Cognito User Pool |
 | Lambda | 単一関数 | 機能ごとに分割 |

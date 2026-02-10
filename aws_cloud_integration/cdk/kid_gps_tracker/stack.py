@@ -2,7 +2,7 @@
 Kid GPS Tracker AWS CDK Stack
 
 interface_design.md セクション 11 に基づく AWS インフラ定義。
-- ポーリング Lambda: nRF Cloud からデバイスメッセージを取得
+- Webhook Lambda: nRF Cloud Message Routing からリアルタイムにメッセージ受信
 - API Lambda: iPhone アプリ向け REST API
 - API Gateway: REST API エンドポイント (x-api-key 認証)
 """
@@ -15,15 +15,13 @@ from aws_cdk import (
     Stack,
     aws_apigateway as apigateway,
     aws_dynamodb as dynamodb,
-    aws_events as events,
-    aws_events_targets as targets,
     aws_lambda as lambda_,
     aws_secretsmanager as secretsmanager,
 )
 from constructs import Construct
 
 # Lambda ビルド済みパッケージのパス（build_lambda.py で生成）
-LAMBDA_POLLING_BUILD_DIR = str(Path(__file__).parent.parent / ".build" / "polling")
+LAMBDA_WEBHOOK_BUILD_DIR = str(Path(__file__).parent.parent / ".build" / "polling")
 LAMBDA_API_BUILD_DIR = str(Path(__file__).parent.parent / ".build" / "api")
 
 
@@ -100,58 +98,38 @@ class KidGpsTrackerStack(Stack):
             removal_policy=RemovalPolicy.RETAIN,
         )
 
-        # PollingState テーブル
-        polling_state_table = dynamodb.Table(
-            self,
-            "PollingState",
-            table_name="PollingState",
-            partition_key=dynamodb.Attribute(
-                name="configKey", type=dynamodb.AttributeType.STRING
-            ),
-            billing_mode=dynamodb.BillingMode.PAY_PER_REQUEST,
-            removal_policy=RemovalPolicy.RETAIN,
-        )
-
         # ============================================================
-        # Lambda: PollingFunction
+        # Lambda: WebhookFunction (nRF Cloud Message Routing 受信)
         # ============================================================
-        polling_function = lambda_.Function(
+        webhook_function = lambda_.Function(
             self,
             "PollingFunction",
             function_name="kid-gps-tracker-polling",
             runtime=lambda_.Runtime.PYTHON_3_12,
             handler="handler.lambda_handler",
-            code=lambda_.Code.from_asset(LAMBDA_POLLING_BUILD_DIR),
+            code=lambda_.Code.from_asset(LAMBDA_WEBHOOK_BUILD_DIR),
             memory_size=256,
-            timeout=Duration.seconds(60),
+            timeout=Duration.seconds(30),
             reserved_concurrent_executions=1,
             environment={
+                "NRF_CLOUD_TEAM_ID": "80ea9eb0-c769-4deb-9a97-06ef4e91aff7",
                 "NRF_CLOUD_API_KEY_SECRET_ARN": api_key_secret.secret_arn,
                 "DEVICE_MESSAGES_TABLE": device_messages_table.table_name,
                 "DEVICE_STATE_TABLE": device_state_table.table_name,
-                "POLLING_STATE_TABLE": polling_state_table.table_name,
             },
         )
 
-        # Lambda に Secrets Manager の読み取り権限を付与
-        api_key_secret.grant_read(polling_function)
+        # Lambda に Secrets Manager の読み取り権限を付与（将来のFOTA用）
+        api_key_secret.grant_read(webhook_function)
 
         # Lambda に DynamoDB テーブルの読み書き権限を付与
-        device_messages_table.grant_read_write_data(polling_function)
-        device_state_table.grant_read_write_data(polling_function)
-        polling_state_table.grant_read_write_data(polling_function)
+        device_messages_table.grant_read_write_data(webhook_function)
+        device_state_table.grant_read_write_data(webhook_function)
 
-        # ============================================================
-        # EventBridge: 5分間隔のポーリングルール
-        # ============================================================
-        polling_rule = events.Rule(
-            self,
-            "PollingSchedule",
-            rule_name="kid-gps-tracker-polling-schedule",
-            schedule=events.Schedule.rate(Duration.minutes(5)),
-            enabled=False,  # デプロイ後に手動で有効化
+        # Function URL（nRF Cloud からの直接HTTP POST用）
+        webhook_url = webhook_function.add_function_url(
+            auth_type=lambda_.FunctionUrlAuthType.NONE,
         )
-        polling_rule.add_target(targets.LambdaFunction(polling_function))
 
         # ============================================================
         # Lambda: ApiFunction
@@ -265,9 +243,15 @@ class KidGpsTrackerStack(Stack):
         # ============================================================
         cdk.CfnOutput(
             self,
-            "PollingFunctionArn",
-            value=polling_function.function_arn,
-            description="Polling Lambda Function ARN",
+            "WebhookUrl",
+            value=webhook_url.url,
+            description="Webhook Function URL (for nRF Cloud Message Routing)",
+        )
+        cdk.CfnOutput(
+            self,
+            "WebhookFunctionArn",
+            value=webhook_function.function_arn,
+            description="Webhook Lambda Function ARN",
         )
         cdk.CfnOutput(
             self,
@@ -307,9 +291,4 @@ class KidGpsTrackerStack(Stack):
             self,
             "SafeZonesTableName",
             value=safe_zones_table.table_name,
-        )
-        cdk.CfnOutput(
-            self,
-            "PollingStateTableName",
-            value=polling_state_table.table_name,
         )
