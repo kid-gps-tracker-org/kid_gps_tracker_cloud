@@ -112,8 +112,10 @@ iPhone アプリ (Swift)
 |---|---|---|
 | deviceId (PK) | String | デバイス識別子 (例: nrf-352656100123456) |
 | timestamp (SK) | String | ISO 8601 タイムスタンプ |
-| messageType | String | GNSS / TEMP |
+| messageType | String | GNSS / TEMP / ZONE_ENTER / ZONE_EXIT |
 | data | Map | メッセージデータ (位置座標、温度値等) |
+| zoneId | String | ゾーン識別子 (ZONE_ENTER / ZONE_EXIT のみ) |
+| zoneName | String | ゾーン名 (ZONE_ENTER / ZONE_EXIT のみ) |
 
 **SafeZones テーブル**
 
@@ -141,7 +143,7 @@ iPhone アプリ (Swift)
 | GET | /devices | デバイス一覧取得 |
 | GET | /devices/{deviceId}/location | 最新位置情報取得 |
 | GET | /devices/{deviceId}/temperature | 最新温度情報取得 |
-| GET | /devices/{deviceId}/history | 位置・温度履歴取得 |
+| GET | /devices/{deviceId}/history | 位置・温度・セーフゾーン入退場履歴取得 |
 | GET | /devices/{deviceId}/safezones | セーフゾーン一覧取得 |
 | PUT | /devices/{deviceId}/safezones | セーフゾーン設定・更新 |
 | DELETE | /devices/{deviceId}/safezones/{zoneId} | セーフゾーン削除 |
@@ -155,8 +157,11 @@ iPhone アプリ (Swift)
 2. 該当デバイスのセーフゾーン定義を DynamoDB から取得
 3. 位置座標とセーフゾーン中心座標の距離を計算
 4. 距離 > 半径 の場合、ゾーン外と判定
-5. DeviceState の inSafeZone が true → false に変化した場合:
-   → SNS 経由で APNs プッシュ通知を送信
+5. DeviceState の inSafeZone の状態遷移を検出:
+   - true → false (ゾーン離脱): DeviceMessages に ZONE_EXIT レコードを書き込み
+                                → SNS 経由で APNs プッシュ通知を送信
+   - false → true (ゾーン帰還): DeviceMessages に ZONE_ENTER レコードを書き込み
+                                → SNS 経由で APNs 帰還通知を送信
 6. DeviceState を更新
 ```
 

@@ -34,11 +34,11 @@ def _get_device_state_table():
 def get_device_history(event: dict) -> dict:
     """
     GET /devices/{deviceId}/history
-    位置・温度の履歴を取得する。
+    位置・温度・セーフゾーン入退場の履歴を取得する。
     API 仕様書 4.4 に基づく。
 
     クエリパラメータ:
-        type: GNSS / GROUND_FIX / TEMP (省略時は全種別)
+        type: GNSS / GROUND_FIX / TEMP / ZONE_ENTER / ZONE_EXIT (省略時は全種別)
         start: 開始時刻 (ISO 8601、デフォルト: 24時間前)
         end: 終了時刻 (ISO 8601、デフォルト: 現在時刻)
         limit: 最大件数 (1-1000、デフォルト: 100)
@@ -133,7 +133,7 @@ def _query_history(table, device_id: str, msg_type: str, start: str, end: str, l
 def _format_history_entry(item: dict) -> dict:
     """
     DeviceMessages アイテムを HistoryEntry 型 (API 仕様書 3.6) にフォーマットする。
-    messageType によって null フィールドが異なる。
+    messageType によって値が入るフィールドが異なる。全エントリに zoneId / zoneName を含む。
     """
     msg_type = item.get("messageType")
 
@@ -145,6 +145,8 @@ def _format_history_entry(item: dict) -> dict:
             "lon": item.get("lon"),
             "accuracy": item.get("accuracy"),
             "temperature": None,
+            "zoneId": None,
+            "zoneName": None,
         }
     elif msg_type == "TEMP":
         return {
@@ -154,6 +156,19 @@ def _format_history_entry(item: dict) -> dict:
             "lon": None,
             "accuracy": None,
             "temperature": item.get("temperature"),
+            "zoneId": None,
+            "zoneName": None,
+        }
+    elif msg_type in ("ZONE_ENTER", "ZONE_EXIT"):
+        return {
+            "timestamp": item.get("timestamp"),
+            "messageType": msg_type,
+            "lat": item.get("lat"),
+            "lon": item.get("lon"),
+            "accuracy": item.get("accuracy"),
+            "temperature": None,
+            "zoneId": item.get("zoneId"),
+            "zoneName": item.get("zoneName"),
         }
     else:
         # 未知の messageType
@@ -164,4 +179,6 @@ def _format_history_entry(item: dict) -> dict:
             "lon": None,
             "accuracy": None,
             "temperature": None,
+            "zoneId": None,
+            "zoneName": None,
         }

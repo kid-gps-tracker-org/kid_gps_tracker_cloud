@@ -70,7 +70,7 @@ def validate_history_params(event: dict) -> Tuple[dict, Optional[str]]:
     limit_str = get_query_param(event, "limit", "100")
 
     # type バリデーション
-    if msg_type and msg_type not in ("GNSS", "GROUND_FIX", "TEMP"):
+    if msg_type and msg_type not in ("GNSS", "GROUND_FIX", "TEMP", "ZONE_ENTER", "ZONE_EXIT"):
         return {}, f"Parameter 'type' is invalid"
 
     # start バリデーション

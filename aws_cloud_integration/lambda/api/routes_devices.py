@@ -8,11 +8,34 @@ GET /devices/{deviceId}/temperature
 """
 import os
 import logging
+from datetime import datetime, timezone, timedelta
 
 import boto3
 
 from response_utils import success_response, error_response
 from validators import get_device_id
+
+# GNSS データがこの時間より古い場合、GROUND_FIX にフォールバックする
+# GNSS は約 5 分間隔で届くため、2 回分 (10 分) 届いていなければ屋内とみなす
+_GNSS_STALE_THRESHOLD_MINUTES = 10
+
+
+def _is_stale(location: dict) -> bool:
+    """
+    位置情報のタイムスタンプが _GNSS_STALE_THRESHOLD_MINUTES 分以上古ければ True を返す。
+    タイムスタンプが取得できない場合は古くないとみなす（フォールバックしない）。
+    """
+    ts = location.get("timestamp")
+    if not ts:
+        return False
+    for fmt in ("%Y-%m-%dT%H:%M:%S.%fZ", "%Y-%m-%dT%H:%M:%SZ"):
+        try:
+            dt = datetime.strptime(ts, fmt).replace(tzinfo=timezone.utc)
+            threshold = datetime.now(timezone.utc) - timedelta(minutes=_GNSS_STALE_THRESHOLD_MINUTES)
+            return dt < threshold
+        except ValueError:
+            continue
+    return False
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +90,11 @@ def get_device_location(event: dict) -> dict:
         return error_response(404, "DEVICE_NOT_FOUND", f"Device {device_id} not found")
 
     last_location = item.get("lastLocation")
+    if not last_location or _is_stale(last_location):
+        # GNSS がない、または古すぎる場合はセルラー測位にフォールバック (source="GROUND_FIX")
+        ground_fix = item.get("lastGroundFixLocation")
+        if ground_fix:
+            last_location = ground_fix
     if not last_location:
         return error_response(404, "NO_LOCATION_DATA",
                               "No location data available for device")
@@ -113,6 +141,10 @@ def _format_device(item: dict) -> dict:
     null ハンドリング: 値がない場合は null を返す。キーは省略しない。
     """
     last_location = item.get("lastLocation")
+    if not last_location or _is_stale(last_location):
+        ground_fix = item.get("lastGroundFixLocation")
+        if ground_fix:
+            last_location = ground_fix
     last_temp = item.get("lastTemperature")
 
     return {

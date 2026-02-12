@@ -5,9 +5,18 @@
 | 項目 | 内容 |
 |---|---|
 | 文書名 | iPhone ↔ AWS REST API 仕様書 |
-| バージョン | 1.0 |
+| バージョン | 1.2 |
 | 作成日 | 2026-02-05 |
+| 更新日 | 2026-02-12 |
 | 関連文書 | [システム仕様書](specification.md), [インターフェース設計書](interface_design.md) |
+
+**変更履歴:**
+
+| バージョン | 日付 | 変更内容 |
+|---|---|---|
+| 1.0 | 2026-02-05 | 初版作成 |
+| 1.1 | 2026-02-12 | GNSS/GROUND_FIX の表示ルールを追加。セーフゾーン判定は GNSS のみ使用する旨を明記。 |
+| 1.2 | 2026-02-12 | GNSS データが 10 分以上古い場合に GROUND_FIX へフォールバックする仕様を追加。 |
 
 ### 本文書の目的
 
@@ -142,12 +151,14 @@ x-api-key: abcdef1234567890
 }
 ```
 
-**source の値:**
+**source の値と iPhone 表示ルール:**
 
-| 値 | 説明 |
-|---|---|
-| `GNSS` | GPS/GNSS 衛星測位 |
-| `GROUND_FIX` | セルラー基地局測位 (屋内等で GNSS 不可時) |
+| 値 | 説明 | iPhone 表示 |
+|---|---|---|
+| `GNSS` | GPS/GNSS 衛星測位。精度 5〜15m。 | デバイスアイコン（ピン）を表示する。軌跡に追加する。 |
+| `GROUND_FIX` | セルラー基地局測位 (屋内等で GNSS 不可時)。誤差 100〜数百m。 | デバイスアイコンを**表示しない**。`accuracy` の値 (m) を半径とした在圏可能性円を表示する。軌跡には**追加しない**。 |
+
+> **Note (フォールバック仕様)**: AWS は GNSS データが**最終取得から 10 分以上経過**している場合、代わりに最新の `GROUND_FIX` データを返す。これにより、デバイスが屋内に入って GNSS が取得できない状況でも約 5 分間隔でセルラー測位の位置情報が iPhone に届く。GNSS が再取得されると自動的に GNSS データに戻る。
 
 ### 3.2 Temperature 型
 
@@ -242,16 +253,28 @@ x-api-key: abcdef1234567890
 
 ### 3.6 HistoryEntry 型
 
-位置・温度の履歴1件。`messageType` によって含まれるフィールドが異なる。
+位置・温度・セーフゾーン入退場の履歴1件。`messageType` によって含まれるフィールドが異なる。
 
 | フィールド | 型 | 必須 | 説明 |
 |---|---|---|---|
-| `timestamp` | String | Yes | 計測時刻 (ISO 8601) |
-| `messageType` | String | Yes | `"GNSS"` / `"GROUND_FIX"` / `"TEMP"` |
+| `timestamp` | String | Yes | 計測/検出時刻 (ISO 8601) |
+| `messageType` | String | Yes | `"GNSS"` / `"GROUND_FIX"` / `"TEMP"` / `"ZONE_ENTER"` / `"ZONE_EXIT"` |
 | `lat` | Number \| null | Yes | 緯度。TEMP の場合 `null` |
 | `lon` | Number \| null | Yes | 経度。TEMP の場合 `null` |
 | `accuracy` | Number \| null | Yes | 精度 (m)。TEMP の場合 `null` |
-| `temperature` | Number \| null | Yes | 温度 (℃)。位置系の場合 `null` |
+| `temperature` | Number \| null | Yes | 温度 (℃)。位置系・ゾーン系の場合 `null` |
+| `zoneId` | String \| null | Yes | ゾーン識別子。ZONE_ENTER / ZONE_EXIT の場合のみ値あり。それ以外は `null` |
+| `zoneName` | String \| null | Yes | ゾーン名。ZONE_ENTER / ZONE_EXIT の場合のみ値あり。それ以外は `null` |
+
+**messageType の値:**
+
+| 値 | 説明 | iPhone 表示 |
+|---|---|---|
+| `GNSS` | GPS/GNSS 衛星測位による位置データ | ピンを表示、軌跡に追加 |
+| `GROUND_FIX` | セルラー基地局測位による位置データ (屋内等で GNSS 不可時) | ピン非表示、`accuracy` 半径の在圏可能性円を表示、軌跡に追加しない |
+| `TEMP` | 温度データ | — |
+| `ZONE_ENTER` | セーフゾーンへの入場イベント (GNSS 判定のみ) | 入場通知 |
+| `ZONE_EXIT` | セーフゾーンからの退場イベント (GNSS 判定のみ) | 退場通知 |
 
 **位置系 (GNSS / GROUND_FIX) の例:**
 
@@ -262,7 +285,9 @@ x-api-key: abcdef1234567890
   "lat": 35.681236,
   "lon": 139.767125,
   "accuracy": 10.5,
-  "temperature": null
+  "temperature": null,
+  "zoneId": null,
+  "zoneName": null
 }
 ```
 
@@ -275,7 +300,39 @@ x-api-key: abcdef1234567890
   "lat": null,
   "lon": null,
   "accuracy": null,
-  "temperature": 23.5
+  "temperature": 23.5,
+  "zoneId": null,
+  "zoneName": null
+}
+```
+
+**セーフゾーン退場 (ZONE_EXIT) の例:**
+
+```json
+{
+  "timestamp": "2026-02-05T12:35:00.000Z",
+  "messageType": "ZONE_EXIT",
+  "lat": 35.690000,
+  "lon": 139.760000,
+  "accuracy": 15.0,
+  "temperature": null,
+  "zoneId": "550e8400-e29b-41d4-a716-446655440000",
+  "zoneName": "自宅"
+}
+```
+
+**セーフゾーン入場 (ZONE_ENTER) の例:**
+
+```json
+{
+  "timestamp": "2026-02-05T13:00:00.000Z",
+  "messageType": "ZONE_ENTER",
+  "lat": 35.681236,
+  "lon": 139.767125,
+  "accuracy": 8.0,
+  "temperature": null,
+  "zoneId": "550e8400-e29b-41d4-a716-446655440000",
+  "zoneName": "自宅"
 }
 ```
 
@@ -499,7 +556,9 @@ FOTA ジョブの状態。
 
 ### 4.4 GET /devices/{deviceId}/history
 
-位置・温度の履歴を取得する。
+位置・温度・セーフゾーン入退場の履歴を取得する。
+
+> **Note**: セーフゾーン入退場イベント (ZONE_ENTER / ZONE_EXIT) は **GNSS 測位のみ**を使用して判定される。GROUND_FIX（セルラー測位）は誤差が大きいため判定対象外。GROUND_FIX の位置データ自体は履歴に含まれる。
 
 **リクエスト:**
 
@@ -514,7 +573,7 @@ FOTA ジョブの状態。
 
 | パラメータ | 型 | 必須 | デフォルト | 説明 |
 |---|---|---|---|---|
-| `type` | String | No | なし (全種別) | `GNSS` / `GROUND_FIX` / `TEMP`。省略時は全種別を返す |
+| `type` | String | No | なし (全種別) | `GNSS` / `GROUND_FIX` / `TEMP` / `ZONE_ENTER` / `ZONE_EXIT`。省略時は全種別を返す |
 | `start` | String | No | 24時間前 | 開始時刻 (ISO 8601) |
 | `end` | String | No | 現在時刻 | 終了時刻 (ISO 8601) |
 | `limit` | Integer | No | 100 | 最大件数 (1〜1000) |
@@ -523,7 +582,7 @@ FOTA ジョブの状態。
 
 - `start` は `end` より前であること
 - `start` は過去30日以内であること
-- `type` は `GNSS` / `GROUND_FIX` / `TEMP` のいずれかであること
+- `type` は `GNSS` / `GROUND_FIX` / `TEMP` / `ZONE_ENTER` / `ZONE_EXIT` のいずれかであること
 - `limit` は 1〜1000 の整数であること
 
 **成功レスポンス:**
@@ -970,9 +1029,11 @@ FOTA ジョブを作成し、ファームウェア更新を開始する。
 
 セーフゾーンの出入りを検出した場合、AWS Lambda が SNS → APNs 経由で iPhone にプッシュ通知を送信する。
 
+> **Note**: プッシュ通知は **GNSS 測位**によるセーフゾーン判定でのみ発生する。GROUND_FIX（セルラー測位）は誤差が大きいため判定対象外であり、GROUND_FIX による位置更新ではプッシュ通知は送信されない。
+
 ### 6.1 セーフゾーン離脱通知 (ZONE_EXIT)
 
-**トリガー**: デバイスの位置がセーフゾーン内 → ゾーン外に変化した場合。
+**トリガー**: GNSS 測位でデバイスの位置がセーフゾーン内 → ゾーン外に変化した場合。
 
 **APNs ペイロード** (iPhone アプリが受信する JSON):
 
@@ -1005,7 +1066,7 @@ FOTA ジョブを作成し、ファームウェア更新を開始する。
 
 ### 6.2 セーフゾーン帰還通知 (ZONE_ENTER)
 
-**トリガー**: デバイスの位置がセーフゾーン外 → ゾーン内に変化した場合。
+**トリガー**: GNSS 測位でデバイスの位置がセーフゾーン外 → ゾーン内に変化した場合。
 
 **APNs ペイロード:**
 
@@ -1058,7 +1119,7 @@ FOTA ジョブを作成し、ファームウェア更新を開始する。
 |---|---|---|---|
 | 全エンドポイント | `x-api-key` ヘッダー | 必須、非空文字列 | `MISSING_API_KEY` |
 | デバイス指定の全エンドポイント | `deviceId` パスパラメータ | `nrf-` + 数字15桁 | `DEVICE_NOT_FOUND` |
-| 4.4 history | `type` クエリ | `GNSS` / `GROUND_FIX` / `TEMP` のいずれか | `INVALID_PARAMETER` |
+| 4.4 history | `type` クエリ | `GNSS` / `GROUND_FIX` / `TEMP` / `ZONE_ENTER` / `ZONE_EXIT` のいずれか | `INVALID_PARAMETER` |
 | 4.4 history | `start` クエリ | 有効な ISO 8601、過去30日以内 | `INVALID_PARAMETER` |
 | 4.4 history | `end` クエリ | 有効な ISO 8601 | `INVALID_PARAMETER` |
 | 4.4 history | `limit` クエリ | 整数 1〜1000 | `INVALID_PARAMETER` |
@@ -1096,11 +1157,13 @@ FOTA ジョブを作成し、ファームウェア更新を開始する。
 | API フィールド | DynamoDB 属性 | 変換 |
 |---|---|---|
 | `timestamp` | `timestamp` (SK) | そのまま |
-| `messageType` | `messageType` | そのまま (`GNSS` / `GROUND_FIX` / `TEMP`) |
+| `messageType` | `messageType` | そのまま (`GNSS` / `GROUND_FIX` / `TEMP` / `ZONE_ENTER` / `ZONE_EXIT`) |
 | `lat` | `lat` | Decimal → Number (TEMP の場合は `null` を返す) |
 | `lon` | `lon` | Decimal → Number (TEMP の場合は `null` を返す) |
 | `accuracy` | `accuracy` | Decimal → Number (TEMP の場合は `null` を返す) |
-| `temperature` | `temperature` | Decimal → Number (位置系の場合は `null` を返す) |
+| `temperature` | `temperature` | Decimal → Number (位置系・ゾーン系の場合は `null` を返す) |
+| `zoneId` | `zoneId` | そのまま (GNSS / GROUND_FIX / TEMP の場合は `null` を返す) |
+| `zoneName` | `zoneName` | そのまま (GNSS / GROUND_FIX / TEMP の場合は `null` を返す) |
 
 **SafeZones テーブル → SafeZone 型:**
 
@@ -1126,3 +1189,43 @@ FOTA ジョブを作成し、ファームウェア更新を開始する。
 - 全レスポンスの `null` フィールドに対応するため、Swift の Codable struct では `Optional` 型を使用すること。
 - タイムスタンプのパースには `ISO8601DateFormatter` を使用し、`.withFractionalSeconds` オプションを有効にすること。
 - プッシュ通知の `data` フィールドは `[String: Any]` で受け取り、`type` フィールドで分岐すること。
+
+#### GNSS / GROUND_FIX の表示ルール
+
+`location.source` または `messageType` の値に応じて表示を切り替えること。
+
+| 条件 | デバイスアイコン (ピン) | 在圏可能性円 | 軌跡 |
+|---|---|---|---|
+| `source == "GNSS"` | 表示する | 表示しない | 追加する |
+| `source == "GROUND_FIX"` | 表示しない | `accuracy` (m) を半径として表示 | 追加しない |
+
+**実装例 (概念コード):**
+
+```swift
+func updateMapDisplay(location: Location) {
+    if location.source == "GNSS" {
+        // デバイスアイコン（ピン）を表示
+        showDevicePin(at: location)
+        // 軌跡に追加
+        addTrackPoint(location)
+        // 在圏可能性円を非表示
+        hidePossibilityCircle()
+    } else if location.source == "GROUND_FIX" {
+        // デバイスアイコンは非表示
+        hideDevicePin()
+        // 在圏可能性円を表示 (accuracy が半径)
+        let radiusMeters = location.accuracy ?? 500.0
+        showPossibilityCircle(center: location, radius: radiusMeters)
+        // 軌跡には追加しない
+    }
+}
+```
+
+**GROUND_FIX の `accuracy` の目安:**
+
+| 測位方式 | 説明 | accuracy の目安 |
+|---|---|---|
+| MCELL (複数基地局) | 複数セルで三角測位 | 100〜500m |
+| SCELL (単一基地局) | 1セルのサービスエリア中心 | 500〜数km |
+
+`accuracy` が `null` の場合はデフォルト値 (例: 500m) を使用すること。

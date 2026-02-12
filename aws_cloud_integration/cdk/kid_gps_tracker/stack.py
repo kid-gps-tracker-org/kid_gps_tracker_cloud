@@ -15,8 +15,10 @@ from aws_cdk import (
     Stack,
     aws_apigateway as apigateway,
     aws_dynamodb as dynamodb,
+    aws_iam as iam,
     aws_lambda as lambda_,
     aws_secretsmanager as secretsmanager,
+    aws_sns as sns,
 )
 from constructs import Construct
 
@@ -99,6 +101,16 @@ class KidGpsTrackerStack(Stack):
         )
 
         # ============================================================
+        # SNS: セーフゾーンアラート Topic
+        # ============================================================
+        alerts_topic = sns.Topic(
+            self,
+            "AlertsTopic",
+            topic_name="kid-gps-tracker-alerts",
+            display_name="Kid GPS Tracker Alerts",
+        )
+
+        # ============================================================
         # Lambda: WebhookFunction (nRF Cloud Message Routing 受信)
         # ============================================================
         webhook_function = lambda_.Function(
@@ -116,6 +128,8 @@ class KidGpsTrackerStack(Stack):
                 "NRF_CLOUD_API_KEY_SECRET_ARN": api_key_secret.secret_arn,
                 "DEVICE_MESSAGES_TABLE": device_messages_table.table_name,
                 "DEVICE_STATE_TABLE": device_state_table.table_name,
+                "SAFE_ZONES_TABLE": safe_zones_table.table_name,
+                "SNS_TOPIC_ARN": alerts_topic.topic_arn,
             },
         )
 
@@ -125,6 +139,10 @@ class KidGpsTrackerStack(Stack):
         # Lambda に DynamoDB テーブルの読み書き権限を付与
         device_messages_table.grant_read_write_data(webhook_function)
         device_state_table.grant_read_write_data(webhook_function)
+        safe_zones_table.grant_read_data(webhook_function)
+
+        # Lambda に SNS Publish 権限を付与
+        alerts_topic.grant_publish(webhook_function)
 
         # Function URL（nRF Cloud からの直接HTTP POST用）
         webhook_url = webhook_function.add_function_url(
@@ -291,4 +309,10 @@ class KidGpsTrackerStack(Stack):
             self,
             "SafeZonesTableName",
             value=safe_zones_table.table_name,
+        )
+        cdk.CfnOutput(
+            self,
+            "AlertsTopicArn",
+            value=alerts_topic.topic_arn,
+            description="SNS Topic ARN for safe zone alerts (subscribe APNs platform application here)",
         )

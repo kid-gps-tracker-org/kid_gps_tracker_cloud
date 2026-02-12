@@ -284,13 +284,15 @@ API Gateway ←→ AWS Lambda ←→ nRF Cloud REST API (FOTA)
 |---|---|---|---|
 | `deviceId` | String | PK (Partition Key) | デバイス識別子 |
 | `timestamp` | String | SK (Sort Key) | ISO 8601 タイムスタンプ |
-| `messageType` | String | - | `GNSS` / `TEMP` |
-| `lat` | Number | - | 緯度 (GNSS のみ) |
-| `lon` | Number | - | 経度 (GNSS のみ) |
-| `accuracy` | Number | - | 精度 m (GNSS のみ) |
+| `messageType` | String | - | `GNSS` / `TEMP` / `ZONE_ENTER` / `ZONE_EXIT` |
+| `lat` | Number | - | 緯度 (GNSS / ZONE_ENTER / ZONE_EXIT のみ) |
+| `lon` | Number | - | 経度 (GNSS / ZONE_ENTER / ZONE_EXIT のみ) |
+| `accuracy` | Number | - | 精度 m (GNSS / ZONE_ENTER / ZONE_EXIT のみ) |
 | `temperature` | Number | - | 温度 ℃ (TEMP のみ) |
+| `zoneId` | String | - | ゾーン識別子 (ZONE_ENTER / ZONE_EXIT のみ) |
+| `zoneName` | String | - | ゾーン名 (ZONE_ENTER / ZONE_EXIT のみ) |
 | `deviceTs` | Number | - | デバイス側タイムスタンプ (ミリ秒) |
-| `receivedAt` | String | - | nRF Cloud 受信時刻 |
+| `receivedAt` | String | - | nRF Cloud 受信時刻 / Lambda 処理時刻 |
 | `ttl` | Number | - | TTL (Unix 秒、30日後に自動削除) |
 
 **GSI (Global Secondary Index):**
@@ -427,8 +429,12 @@ API Gateway ←→ AWS Lambda ←→ nRF Cloud REST API (FOTA)
 5. DeviceState の inSafeZone / safeZoneStatus を取得
    │
 6. 状態遷移の検出:
-   │ ├── true → false (ゾーン内 → ゾーン外): 離脱アラート送信
-   │ ├── false → true (ゾーン外 → ゾーン内): 帰還通知送信
+   │ ├── true → false (ゾーン内 → ゾーン外):
+   │ │     DeviceMessages に ZONE_EXIT レコードを書き込み
+   │ │     SNS 経由でプッシュ通知 (ZONE_EXIT) を送信
+   │ ├── false → true (ゾーン外 → ゾーン内):
+   │ │     DeviceMessages に ZONE_ENTER レコードを書き込み
+   │ │     SNS 経由でプッシュ通知 (ZONE_ENTER) を送信
    │ └── 変化なし: 通知なし
    │
 7. DeviceState を更新
@@ -591,7 +597,7 @@ API Gateway ←→ AWS Lambda ←→ nRF Cloud REST API (FOTA)
 
 | パラメータ | 型 | 必須 | 説明 |
 |---|---|---|---|
-| `type` | String | No | `GNSS` / `TEMP` / 省略で両方 |
+| `type` | String | No | `GNSS` / `TEMP` / `ZONE_ENTER` / `ZONE_EXIT` / 省略で全種別 |
 | `start` | String | No | 開始時刻 (ISO 8601) |
 | `end` | String | No | 終了時刻 (ISO 8601) |
 | `limit` | Integer | No | 最大件数 (デフォルト: 100, 最大: 1000) |
@@ -607,15 +613,33 @@ API Gateway ←→ AWS Lambda ←→ nRF Cloud REST API (FOTA)
       "messageType": "GNSS",
       "lat": 35.6812,
       "lon": 139.7671,
-      "accuracy": 10.5
+      "accuracy": 10.5,
+      "temperature": null,
+      "zoneId": null,
+      "zoneName": null
     },
     {
       "timestamp": "2026-02-03T10:30:05.000Z",
       "messageType": "TEMP",
-      "temperature": 23.5
+      "lat": null,
+      "lon": null,
+      "accuracy": null,
+      "temperature": 23.5,
+      "zoneId": null,
+      "zoneName": null
+    },
+    {
+      "timestamp": "2026-02-03T10:35:00.000Z",
+      "messageType": "ZONE_EXIT",
+      "lat": 35.6900,
+      "lon": 139.7600,
+      "accuracy": 15.0,
+      "temperature": null,
+      "zoneId": "550e8400-e29b-41d4-a716-446655440000",
+      "zoneName": "自宅"
     }
   ],
-  "count": 2
+  "count": 3
 }
 ```
 
