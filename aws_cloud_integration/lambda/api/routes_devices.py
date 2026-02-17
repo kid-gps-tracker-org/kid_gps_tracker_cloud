@@ -165,7 +165,7 @@ def _format_location(loc: dict) -> dict:
         "lat": loc.get("lat"),
         "lon": loc.get("lon"),
         "accuracy": loc.get("accuracy"),
-        "source": loc.get("source"),
+        "source": loc.get("source", "GNSS"),
         "timestamp": loc.get("timestamp"),
     }
 

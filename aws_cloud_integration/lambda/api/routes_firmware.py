@@ -99,7 +99,7 @@ def post_firmware_update(event: dict) -> dict:
     firmware_id = body.get("firmwareId")
     if not firmware_id:
         return error_response(400, "INVALID_REQUEST",
-                              "Request body is not valid JSON")
+                              "Required field 'firmwareId' is missing")
 
     # デバイス存在チェック
     table = _get_device_state_table()
@@ -119,15 +119,28 @@ def post_firmware_update(event: dict) -> dict:
         client = NrfCloudFotaClient(api_key)
         result = client.create_fota_job(firmware_id, [device_id])
 
+        fota_info = {
+            "jobId": result.get("jobId"),
+            "status": "QUEUED",
+            "firmwareId": firmware_id,
+            "createdAt": result.get("createdAt"),
+            "completedAt": None,
+        }
+
+        # DeviceState に FOTA ジョブ情報を保存（仕様書 4.9 ステップ4）
+        try:
+            table.update_item(
+                Key={"deviceId": device_id},
+                UpdateExpression="SET #lastFota = :lastFota",
+                ExpressionAttributeNames={"#lastFota": "lastFota"},
+                ExpressionAttributeValues={":lastFota": fota_info},
+            )
+        except Exception as save_err:
+            logger.error(f"Failed to save FOTA job to DeviceState: {save_err}")
+
         return success_response(201, {
             "deviceId": device_id,
-            "fota": {
-                "jobId": result.get("jobId"),
-                "status": "QUEUED",
-                "firmwareId": firmware_id,
-                "createdAt": result.get("createdAt"),
-                "completedAt": None,
-            },
+            "fota": fota_info,
         })
     except Exception as e:
         logger.exception(f"Failed to create FOTA job: {e}")
