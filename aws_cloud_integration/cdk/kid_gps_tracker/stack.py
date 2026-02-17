@@ -111,6 +111,16 @@ class KidGpsTrackerStack(Stack):
         )
 
         # ============================================================
+        # Secrets Manager: APNs 証明書・秘密鍵 (手動で登録済み)
+        # ============================================================
+        apns_cert_secret = secretsmanager.Secret.from_secret_name_v2(
+            self, "ApnsCertSecret", "kid-gps-tracker/apns-cert",
+        )
+        apns_key_secret = secretsmanager.Secret.from_secret_name_v2(
+            self, "ApnsKeySecret", "kid-gps-tracker/apns-key",
+        )
+
+        # ============================================================
         # Lambda: WebhookFunction (nRF Cloud Message Routing 受信)
         # ============================================================
         webhook_function = lambda_.Function(
@@ -166,14 +176,37 @@ class KidGpsTrackerStack(Stack):
                 "DEVICE_MESSAGES_TABLE": device_messages_table.table_name,
                 "DEVICE_STATE_TABLE": device_state_table.table_name,
                 "SAFE_ZONES_TABLE": safe_zones_table.table_name,
+                "SNS_TOPIC_ARN": alerts_topic.topic_arn,
+                "APNS_CERT_SECRET_ARN": apns_cert_secret.secret_arn,
+                "APNS_KEY_SECRET_ARN": apns_key_secret.secret_arn,
             },
         )
 
         # API Lambda に権限を付与
         api_key_secret.grant_read(api_function)
+        apns_cert_secret.grant_read(api_function)
+        apns_key_secret.grant_read(api_function)
         device_messages_table.grant_read_data(api_function)
-        device_state_table.grant_read_data(api_function)
+        device_state_table.grant_read_write_data(api_function)
         safe_zones_table.grant_read_write_data(api_function)
+
+        # API Lambda に SNS 権限を付与（トークン登録・サブスクリプション管理）
+        api_function.add_to_role_policy(iam.PolicyStatement(
+            actions=[
+                "sns:CreatePlatformApplication",
+                "sns:GetPlatformApplicationAttributes",
+                "sns:SetPlatformApplicationAttributes",
+                "sns:CreatePlatformEndpoint",
+                "sns:SetEndpointAttributes",
+                "sns:GetEndpointAttributes",
+                "sns:DeleteEndpoint",
+                "sns:Subscribe",
+                "sns:Unsubscribe",
+                "sns:ListPlatformApplications",
+            ],
+            resources=["*"],
+        ))
+        alerts_topic.grant_publish(api_function)
 
         # ============================================================
         # API Gateway: REST API
@@ -243,6 +276,10 @@ class KidGpsTrackerStack(Stack):
         # DELETE /devices/{deviceId}/safezones/{zoneId}
         safezone = safezones.add_resource("{zoneId}")
         safezone.add_method("DELETE", api_integration, api_key_required=True)
+
+        # POST /devices/{deviceId}/notification-token
+        notification_token = device.add_resource("notification-token")
+        notification_token.add_method("POST", api_integration, api_key_required=True)
 
         # /devices/{deviceId}/firmware
         firmware = device.add_resource("firmware")

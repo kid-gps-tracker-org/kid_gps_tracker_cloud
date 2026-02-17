@@ -21,6 +21,7 @@ def _register_routes():
     from routes_history import get_device_history
     from routes_safezones import get_safezones, put_safezone, delete_safezone
     from routes_firmware import get_firmware, post_firmware_update, get_firmware_status
+    from routes_notifications import post_notification_token
 
     _ROUTES[("GET", "/devices")] = get_devices
     _ROUTES[("GET", "/devices/{deviceId}/location")] = get_device_location
@@ -29,6 +30,7 @@ def _register_routes():
     _ROUTES[("GET", "/devices/{deviceId}/safezones")] = get_safezones
     _ROUTES[("PUT", "/devices/{deviceId}/safezones")] = put_safezone
     _ROUTES[("DELETE", "/devices/{deviceId}/safezones/{zoneId}")] = delete_safezone
+    _ROUTES[("POST", "/devices/{deviceId}/notification-token")] = post_notification_token
     _ROUTES[("GET", "/devices/{deviceId}/firmware")] = get_firmware
     _ROUTES[("POST", "/devices/{deviceId}/firmware/update")] = post_firmware_update
     _ROUTES[("GET", "/devices/{deviceId}/firmware/status")] = get_firmware_status

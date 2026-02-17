@@ -438,6 +438,12 @@ def _send_zone_notification(
                 "APNS_SANDBOX": json.dumps(apns_payload, ensure_ascii=False),
             }),
             MessageStructure="json",
+            MessageAttributes={
+                "deviceId": {
+                    "DataType": "String",
+                    "StringValue": device_id,
+                },
+            },
         )
         logger.info(f"SNS notification sent: {event_type} for {device_id} zone={zone['zoneId']}")
     except Exception as e:
